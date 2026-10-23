@@ -39,6 +39,8 @@
     .status { font-size: 12px; color: var(--ok); }
     label.opt { display: flex; gap: 8px; align-items: flex-start; font-weight: 600; }
     label.opt input { margin-top: 3px; }
+    label.field { display: block; margin: 10px 0 4px; font-size: 12px; font-weight: 600; }
+    label.field:first-of-type { margin-top: 0; }
   </style>
 </head>
 <body>
@@ -56,6 +58,16 @@
     <label class="opt" id="age-title"><input type="checkbox" id="rdap" /> Look up domain age</label>
     <p class="hint">Fills in creation dates in the sidebar's Verify list. Only the bare domain name is sent, to RDAP and then whois.com; nothing from the email leaves this machine.</p>
     <p class="hint" id="rdap-state" role="status"></p>
+  </section>
+  <section aria-labelledby="settings-title">
+    <h1 id="settings-title">Team settings</h1>
+    <label class="field" for="sim">Simulation domains</label>
+    <textarea id="sim" spellcheck="false" placeholder="domain | vendor | source&#10;example-sim.com | Vendor name | vendor's allowlist page, 2026-10"></textarea>
+    <p class="hint">Domains attributed to a phishing-simulation vendor, one per line, with where that was confirmed. A match is shown as a Simulation hypothesis; without a source it asks to corroborate it (guide, step 8).</p>
+    <label class="field" for="org">Organisation domains</label>
+    <textarea id="org" spellcheck="false" placeholder="client.com&#10;client-group.com"></textarea>
+    <p class="hint">The organisations whose mail you analyse: lookalikes of these domains, and their name used from other domains, are flagged. Saved on this computer only.</p>
+    <p class="hint" id="settings-state" role="status"></p>
   </section>
   <script src="inflate-zlib.js"></script>
   <script src="unwrap.js"></script>

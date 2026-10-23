@@ -4,7 +4,7 @@ Thunderbird add-on that removes email-security URL wrappers (every known layer) 
 
 A normal click opens the destination URL in your browser. The stored `.eml` is not changed. PeelScout does not need internet to run (the optional domain-age lookup — RDAP, then whois.com — is the only network use, and it is off by default).
 
-Not in this version: QR inside PDF attachments, phone OCR on images, Outlook `.msg` attachments. Translator is not included.
+Not in this version: QR or OCR inside PDF pages (a scanned PDF is flagged, not read), Outlook `.msg` attachments. Translator is not included.
 
 ## Install in Thunderbird
 
@@ -23,6 +23,26 @@ Release builds are not signed yet. If Thunderbird says the add-on could not be v
 Debug Add-ons → **Load Temporary Add-on…** → `manifest.json` from a source checkout. Unloads when Thunderbird restarts.
 
 Requires Thunderbird 128+.
+
+## 1.9.0
+
+- New: reports forwarded **in the body** to a reporting mailbox (`phishing@`, `abuse@`, `protection-phishing@`…) are split into the report and the **Forwarded original**, rebuilt from the Outlook / Gmail / Apple header block (EN, FR, ES, PT, DE, IT, NL) with only its own links; the sidebar opens on the original. Nothing in the report wrapper is offered as a candidate. A narrative report with no forwarded email (a call, an SMS, a customer's report) points to FIR → Internal Communication; payment instructions forwarded without headers point to FIR → Missing Headers
+- New: **PDF attachments are read statically** (`pdfscan.js`): text (including Chrome/Skia "Save as PDF" lures through their ToUnicode maps), link targets, JavaScript / launch / embedded-file features, headless-browser producer. RC4-encrypted PDFs are opened when the email itself gives the password (e.g. "your email address is the password"); AES ones are reported as encrypted. The lure link and the file (with SHA-256) become candidates; callback numbers inside the PDF count for Vishing
+- New: a message with no text of its own and a large image/PDF is flagged ("the content is in the attachment"); freemail + empty body + one randomly named image/PDF is flagged as the callback-scam pattern
+- New: external-mail banners and legal footers are ignored for word counts, language and phrases
+- New: obfuscation signals — Unicode math letters (𝗕𝗼𝗹𝗱), accents scattered over every word, words mixing Latin with Cyrillic/Greek lookalikes; phrase rules see the folded text
+- New: redirect hops after the security wrappers are followed (`?url=`, `?redirect=`, `?liga=`, affiliate `aff_c`, paths carrying a URL) and flagged with the declared destination; Google redirects that hide their destination, email addresses in base64 inside URLs and misspelt WordPress folders are flagged
+- New: sender and recipient checks — sent to itself, undisclosed or missing To, To that differs from the delivered-for address, To that is the contact the body gives, URL fragments in the From address, a date or a system notice as display name, an invented `<address>` inside the display name, `Sender` on another domain, random-looking address parts, greeting by the address's local part, display name / address / signature naming three people, lookalikes of the recipient's organisation and brands misspelt by one swap (`wellsfrago`)
+- New: an old conversation between strangers quoted below the message is flagged as filler and left out of words, language, phrases, phone numbers and action links; random token strings (hash-busters), reference numbers bolted onto the subject, randomly named attachments, and "Re:" threads that only quote the sender
+- New: Response routes — addresses the body asks to write or pay to (Interac / e-transfer) are extracted; a Reply-To on another domain is no longer BEC by itself (and is normal for webinar platforms); implausible returns (≥ 100 %), personal-details forms and debt collection from freemail point to 419 ahead of a short-message RECON; asking for a mobile number from freemail is BEC (SEA p. 7); family-office and software-outsourcing pitches are RECON. Once a Response route has strong evidence, the Reply-To, the body's contact/payment address and a freemail sender become candidates
+- New: lure phrases for held messages / full mailbox, pending tasks, tenders, leave requests, W-9, secure-email portals; bank and payroll brands (TD, Scotiabank, Desjardins, Wells Fargo, USAA, RBC, QuickBooks, Rippling…); a secure-message lure of a bank or another brand is Link → Phishing, a Microsoft/Google one Link → O365
+- New: Simulation hypothesis — ThreatSim-style Message-IDs and campaign pixels are weak hints; domains the team lists in the popup (**Team settings**, with vendor and source) identify the exercise, go first and clear the candidates. Organisation domains can be listed there too. Both are saved in this Thunderbird profile only
+- New: **OCR on demand** — "Read images (OCR)" in the sidebar reads the images of the message (inline, attached and inside attached emails; ≥ 15 KB, six largest) with a local copy of tesseract.js 5.1.1 (English, French, Spanish). The text joins the evidence as if it were the body (callback numbers, payment addresses, brands, URLs written in the image), and is listed under "Text read from images". Nothing is downloaded or sent: the library, the WebAssembly core and the language models ship in `ocr/` (about 9.5 MB; first use takes a few seconds), and the worker closes after three idle minutes
+- New: Do Not Engage / No Threat Detected hypotheses when no route has strong evidence, always shown after the routes
+- Fix: click trackers named after the sender (mail-merge tools such as YAMM), Gmail signature images and social-profile links are not action links
+- Fix: phone numbers become Vishing candidates only next to a call to action, not in signatures or in a quoted old thread
+- Fix: RFC 2231 attachment names (`filename*0=`) in attached messages
+- Added: `scripts/eval-samples.js` to measure the engine against a local folder of classified `.eml` samples
 
 ## 1.8.0
 
@@ -123,4 +143,21 @@ Token-only wrappers (Mimecast `protect-*`, some Sophos/VIPRE) stay as-is.
 npm test
 ```
 
-Runs the unit tests for the unwrap, nested-EML, ICS and phone parsers with Node's built-in runner (no dependencies). Leave `test/`, `scripts/` and `package.json` out when zipping the `.xpi`.
+Runs the unit tests for the unwrap, nested-EML, ICS, phone, forward and PDF parsers and the insights engine with Node's built-in runner (no dependencies). Leave `test/`, `scripts/` and `package.json` out when zipping the `.xpi`.
+
+To measure the engine against classified samples (folder names give the expected result, e.g. `Malicious/Link/O365`, `FIR`, `NTD`):
+
+```bash
+node scripts/eval-samples.js "/path/to/EML Samples" --json results.json
+```
+
+Keep the samples outside the repository: they are real customer mail.
+
+To include OCR in the measurement, read the samples' images with the add-on's own OCR (it is the browser build, so the script serves a page on 127.0.0.1 for any browser to open) and pass the result:
+
+```bash
+node scripts/ocr-samples.js "/path/to/EML Samples" ocr-cache.json
+node scripts/eval-samples.js "/path/to/EML Samples" --ocr-cache ocr-cache.json
+```
+
+The `.xpi` must include `ocr/` and `ocr.js`. The files in `ocr/` are tesseract.js 5.1.1, tesseract.js-core 5.1.1 (`tesseract-core-simd-lstm.wasm.js`) and @tesseract.js-data 1.0.0 (`4.0.0_best_int` models), all Apache-2.0 (licenses in `ocr/`); `test/ocr.test.js` pins their SHA-256.
