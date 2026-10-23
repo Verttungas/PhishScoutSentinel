@@ -1,26 +1,71 @@
 const src = document.getElementById("src");
-const out = document.getElementById("out");
 const meta = document.getElementById("meta");
+const chain = document.getElementById("chain");
+const copyBtn = document.getElementById("copy");
+const status = document.getElementById("status");
+const DEFAULT_HINT = meta.textContent;
+let destination = "";
+
+function step(label, url, final) {
+  const li = document.createElement("li");
+  if (final) li.className = "final";
+  const l = document.createElement("span");
+  l.className = "step-label";
+  l.textContent = label;
+  const u = document.createElement("span");
+  u.className = "url";
+  u.textContent = url;
+  li.appendChild(l);
+  li.appendChild(u);
+  chain.appendChild(li);
+}
+
+// Peel one layer at a time so every intermediate URL is visible.
 function run() {
   const href = src.value.trim();
-  if (!href) { out.textContent = "\u2014"; return; }
-  const r = WrapperUnwrap.unwrapAll(href);
-  if (r.changed) {
-    meta.textContent = "Removed: " + r.vendor + (r.note ? " (stopped at " + r.note + ")" : "");
-    out.textContent = r.url;
-  } else if (r.note) {
-    meta.textContent = r.note;
-    out.textContent = r.url;
-  } else {
-    meta.textContent = "No known security wrapper.";
-    out.textContent = href;
+  chain.textContent = "";
+  status.textContent = "";
+  destination = "";
+  copyBtn.disabled = true;
+  chain.hidden = true;
+  if (!href) {
+    meta.textContent = DEFAULT_HINT;
+    return;
   }
+  let cur = href;
+  let stopNote = "";
+  const layers = [];
+  for (let i = 0; i < 6; i++) {
+    const s = WrapperUnwrap.unwrapStep(cur, true);
+    if (!s.changed) {
+      if (s.vendor) stopNote = s.vendor + ": " + (s.note || "cannot be decoded offline.");
+      break;
+    }
+    layers.push({ vendor: s.vendor, url: cur });
+    cur = s.url;
+  }
+  if (!layers.length) {
+    meta.textContent = stopNote || "No known wrapper on this link.";
+    return;
+  }
+  meta.textContent = layers.length + (layers.length === 1 ? " layer" : " layers") + " removed." + (stopNote ? " Stopped at " + stopNote : "");
+  for (const l of layers) step(l.vendor, l.url, false);
+  step("Destination", cur, true);
+  chain.hidden = false;
+  destination = cur;
+  copyBtn.disabled = false;
 }
-document.getElementById("go").addEventListener("click", run);
+
 src.addEventListener("input", run);
-document.getElementById("copy").addEventListener("click", async () => {
-  const t = out.textContent;
-  if (t && t !== "\u2014") await navigator.clipboard.writeText(t);
+copyBtn.addEventListener("click", async () => {
+  if (!destination) return;
+  try {
+    await navigator.clipboard.writeText(destination);
+    status.textContent = "Copied";
+  } catch (_) {
+    status.textContent = "Copy failed; select the URL above instead";
+  }
+  setTimeout(() => { status.textContent = ""; }, 1800);
 });
 
 const rdap = document.getElementById("rdap");

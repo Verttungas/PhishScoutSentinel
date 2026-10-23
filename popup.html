@@ -4,27 +4,59 @@
   <meta charset="utf-8" />
   <title>PeelScout</title>
   <style>
-    body { font: 13px/1.4 sans-serif; margin: 12px; width: 380px; color: #1c2430; }
-    label { font-weight: 700; display: block; margin-bottom: 4px; }
-    textarea { width: 100%; height: 72px; font: 11px monospace; }
-    pre { white-space: pre-wrap; word-break: break-all; background: #f4f1ea; padding: 8px; min-height: 3em; }
-    button { margin-top: 6px; }
-    .meta { color: #5c6774; font-size: 12px; margin: 6px 0; }
-    label.opt { font-weight: 400; display: flex; gap: 6px; align-items: center; }
-    hr { border: 0; border-top: 1px solid #ddd; margin: 12px 0 8px; }
+    :root {
+      --canvas: #f2f3f5; --surface: #ffffff; --ink: #1d2329; --muted: #5e6873; --rule: #d5d9de;
+      --accent: #1f5fbf; --accent-ink: #ffffff; --ok: #2d7d46; --code-bg: #eef0f3; --step: #8a5a00;
+      --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+      color-scheme: light dark;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --canvas: #17191c; --surface: #202328; --ink: #e4e7eb; --muted: #9aa4af; --rule: #353a41; --accent: #8ab4f8; --accent-ink: #10213d; --ok: #7bc88f; --code-bg: #2b2f35; --step: #e3b341; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; width: 400px; font: 13px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--ink); background: var(--canvas); }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    section { padding: 12px 14px; background: var(--surface); }
+    section + section { border-top: 1px solid var(--rule); }
+    h1 { margin: 0 0 8px; font-size: 14px; font-weight: 650; }
+    textarea { display: block; width: 100%; height: 64px; padding: 6px 8px; border: 1px solid var(--rule); border-radius: 6px; background: var(--code-bg); color: var(--ink); font: 11.5px/1.4 var(--mono); resize: vertical; }
+    .hint { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
+    ol { list-style: none; margin: 10px 0 0; padding: 0; }
+    li { position: relative; padding: 5px 0 5px 14px; }
+    li::before { content: ""; position: absolute; left: 3px; top: 0; bottom: 0; width: 2px; background: var(--rule); }
+    li::after { content: ""; position: absolute; left: 0; top: 11px; width: 8px; height: 8px; border-radius: 50%; background: var(--step); }
+    li.final::after { background: var(--ok); }
+    li.final::before { bottom: 50%; }
+    li:first-child::before { top: 50%; }
+    li:only-child::before { display: none; }
+    .step-label { font-size: 11.5px; color: var(--muted); }
+    .url { display: block; margin-top: 2px; font: 11.5px/1.4 var(--mono); overflow-wrap: anywhere; }
+    li.final .url { font-weight: 600; }
+    .row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+    button { padding: 5px 11px; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); color: var(--ink); font: inherit; font-size: 12px; cursor: pointer; }
+    button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+    button:disabled { opacity: 0.5; cursor: default; }
+    .status { font-size: 12px; color: var(--ok); }
+    label.opt { display: flex; gap: 8px; align-items: flex-start; font-weight: 600; }
+    label.opt input { margin-top: 3px; }
   </style>
 </head>
 <body>
-  <label for="src">Paste wrapped URL</label>
-  <textarea id="src" placeholder="https://nam10.safelinks.protection.outlook.com/?url=..."></textarea>
-  <button id="go" type="button">Unwrap</button>
-  <p class="meta" id="meta">Open a message: wrappers on links are removed automatically. Insights, nested EMLs, image attachments and QR URLs appear in the sidebar.</p>
-  <pre id="out">—</pre>
-  <button id="copy" type="button">Copy result</button>
-  <hr />
-  <label class="opt"><input type="checkbox" id="rdap" /> Look up domain age (RDAP, then whois.com)</label>
-  <p class="meta" id="rdap-state"></p>
-  <p class="meta">For the Insights panel. Sends only the bare domain name to rdap.org / the registry and, when RDAP has no answer, to whois.com; nothing from the email leaves this machine. Off by default.</p>
+  <section aria-labelledby="unwrap-title">
+    <h1 id="unwrap-title">Unwrap a link</h1>
+    <textarea id="src" autofocus spellcheck="false" aria-label="Wrapped URL" placeholder="Paste a Safe Links, Proofpoint, Mimecast… URL"></textarea>
+    <p class="hint" id="meta">Links in opened messages are unwrapped automatically; the sidebar shows the evidence.</p>
+    <ol id="chain" aria-label="Unwrapping steps" hidden></ol>
+    <div class="row">
+      <button id="copy" class="primary" type="button" disabled>Copy destination</button>
+      <span class="status" id="status" role="status" aria-live="polite"></span>
+    </div>
+  </section>
+  <section aria-labelledby="age-title">
+    <label class="opt" id="age-title"><input type="checkbox" id="rdap" /> Look up domain age</label>
+    <p class="hint">Fills in creation dates in the sidebar's Verify list. Only the bare domain name is sent, to RDAP and then whois.com; nothing from the email leaves this machine.</p>
+    <p class="hint" id="rdap-state" role="status"></p>
+  </section>
   <script src="inflate-zlib.js"></script>
   <script src="unwrap.js"></script>
   <script src="popup.js"></script>

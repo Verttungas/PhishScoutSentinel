@@ -19,8 +19,7 @@
   // Everything PeelScout shows lives in a fixed panel on the right, inside its own
   // shadow root, so the email's HTML is left as it is (it only gets narrower, and the
   // whole width comes back when the panel is collapsed).
-  const BANNER_ORDER = ["wrapper-signals", "wrapper-img-attachments", "wrapper-nested-eml", "wrapper-ics-banner", "wrapper-qr-banner"];
-  const SIDEBAR_MIN = 300;
+    const SIDEBAR_MIN = 300;
   let SB = null;
   let sbHost = null;
   let sbWidth = 380;
@@ -38,7 +37,7 @@
       st.id = "peelscout-layout";
       (document.head || document.documentElement).appendChild(st);
     }
-    const w = sbCollapsed ? 30 : sbWidth;
+    const w = sbCollapsed ? 32 : sbWidth;
     sbHost.style.setProperty("--peel-width", sbWidth + "px");
     sbHost.toggleAttribute("collapsed", sbCollapsed);
     st.textContent = "html{margin-right:" + w + "px !important}";
@@ -56,6 +55,21 @@
     saveLayout();
   }
 
+  const ICON_FOLD = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const TABS = [
+    { id: "evidence", label: "Evidence" },
+    { id: "indicators", label: "Indicators" },
+    { id: "previews", label: "Previews" },
+  ];
+  // Slots per tab, in display order; sections land in their slot whenever they arrive.
+  const SLOTS = {
+    evidence: ["wrapper-signals"],
+    indicators: ["indicators", "wrapper-ics-banner", "wrapper-qr-banner"],
+    previews: ["wrapper-img-attachments", "wrapper-nested-eml"],
+  };
+  let activeTab = "evidence";
+  let statusTimer = 0;
+
   function sidebar() {
     if (SB) return SB;
     sbHost = document.createElement("peelscout-sidebar");
@@ -66,20 +80,60 @@
     const sb = document.createElement("div");
     sb.className = "sb";
     sb.innerHTML =
-      '<button type="button" class="sb-rail" title="Show PeelScout"><span class="sb-rail-label">PeelScout</span><span class="sb-rail-badges"></span></button>' +
-      '<div class="sb-main"><div class="sb-head"><span class="sb-title">PeelScout</span><span class="sb-badges"></span>' +
-      '<button type="button" class="sb-collapse" title="Hide sidebar">›</button></div><div class="sb-body"><div class="sb-empty">Analysing…</div></div></div>' +
-      '<div class="sb-resize" title="Drag to resize"></div>';
+      '<button type="button" class="sb-rail" aria-label="Show PeelScout sidebar"><span class="sb-rail-label">PeelScout</span><span class="sb-rail-count"></span></button>' +
+      '<div class="sb-main" role="complementary" aria-label="PeelScout">' +
+      '<div class="sb-head"><span class="sb-title">PeelScout</span><span class="sb-status" role="status" aria-live="polite"></span>' +
+      '<button type="button" class="icon-btn sb-collapse" aria-label="Hide sidebar" title="Hide sidebar">' + ICON_FOLD + "</button></div>" +
+      '<div class="sb-scroll"><section class="ov" id="sb-overview" aria-label="Overview"><p class="empty">Analysing this message…</p></section>' +
+      '<div class="sb-tabs" role="tablist" aria-label="PeelScout sections"></div></div></div>' +
+      '<div class="sb-resize" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" tabindex="0"></div>';
     SB.appendChild(sb);
-    const body = sb.querySelector(".sb-body");
-    for (const id of BANNER_ORDER) {
-      const slot = document.createElement("div");
-      slot.id = "slot-" + id;
-      body.appendChild(slot);
+    const scroll = sb.querySelector(".sb-scroll");
+    const tablist = sb.querySelector(".sb-tabs");
+    for (const t of TABS) {
+      const tab = document.createElement("button");
+      tab.type = "button";
+      tab.className = "sb-tab";
+      tab.id = "tab-" + t.id;
+      tab.setAttribute("role", "tab");
+      tab.setAttribute("aria-controls", "panel-" + t.id);
+      tab.dataset.tab = t.id;
+      tab.innerHTML = '<span class="sb-tab-label"></span><span class="sb-tab-count"></span>';
+      tab.querySelector(".sb-tab-label").textContent = t.label;
+      tab.addEventListener("click", function () { setTab(t.id, true); });
+      tablist.appendChild(tab);
+      const panel = document.createElement("div");
+      panel.className = "sb-panel";
+      panel.id = "panel-" + t.id;
+      panel.setAttribute("role", "tabpanel");
+      panel.setAttribute("aria-labelledby", "tab-" + t.id);
+      for (const slotId of SLOTS[t.id]) {
+        const slot = document.createElement("div");
+        slot.id = "slot-" + slotId;
+        panel.appendChild(slot);
+      }
+      const empty = document.createElement("p");
+      empty.className = "empty panel-empty";
+      empty.textContent = t.id === "previews" ? "No image attachments or attached emails in this message." : t.id === "indicators" ? "Indicators appear once the message is analysed." : "Evidence appears once the message is analysed.";
+      panel.appendChild(empty);
+      scroll.appendChild(panel);
     }
+    // Arrow keys move between tabs (WAI-ARIA tabs pattern).
+    tablist.addEventListener("keydown", function (e) {
+      const ids = TABS.map(function (t) { return t.id; });
+      let i = ids.indexOf(activeTab);
+      if (e.key === "ArrowRight") i = (i + 1) % ids.length;
+      else if (e.key === "ArrowLeft") i = (i - 1 + ids.length) % ids.length;
+      else if (e.key === "Home") i = 0;
+      else if (e.key === "End") i = ids.length - 1;
+      else return;
+      e.preventDefault();
+      setTab(ids[i], true);
+    });
     sb.querySelector(".sb-rail").addEventListener("click", function () { setCollapsed(false); });
     sb.querySelector(".sb-collapse").addEventListener("click", function () { setCollapsed(true); });
-    sb.querySelector(".sb-resize").addEventListener("mousedown", function (e) {
+    const handle = sb.querySelector(".sb-resize");
+    handle.addEventListener("mousedown", function (e) {
       e.preventDefault();
       function move(ev) {
         sbWidth = Math.max(SIDEBAR_MIN, Math.min(Math.round(window.innerWidth * 0.7), window.innerWidth - ev.clientX));
@@ -93,13 +147,22 @@
       document.addEventListener("mousemove", move, true);
       document.addEventListener("mouseup", up, true);
     });
+    handle.addEventListener("keydown", function (e) {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      e.preventDefault();
+      sbWidth = Math.max(SIDEBAR_MIN, Math.min(Math.round(window.innerWidth * 0.7), sbWidth + (e.key === "ArrowLeft" ? 24 : -24)));
+      applyLayout();
+      saveLayout();
+    });
     (document.documentElement || document.body).appendChild(sbHost);
+    setTab(activeTab, false);
     applyLayout();
     try {
       if (api && api.storage && api.storage.local) {
-        api.storage.local.get(["sidebarWidth", "sidebarCollapsed"]).then(function (v) {
+        api.storage.local.get(["sidebarWidth", "sidebarCollapsed", "sidebarTab"]).then(function (v) {
           if (v.sidebarWidth) sbWidth = Math.max(SIDEBAR_MIN, +v.sidebarWidth || 380);
           if (typeof v.sidebarCollapsed === "boolean" && window.innerWidth >= 720) sbCollapsed = v.sidebarCollapsed;
+          if (v.sidebarTab && SLOTS[v.sidebarTab]) setTab(v.sidebarTab, false);
           applyLayout();
         }, function () {});
       }
@@ -107,21 +170,52 @@
     return SB;
   }
 
-  function setBadges(items) {
+  function setTab(id, focus) {
+    activeTab = id;
     if (!SB) return;
-    for (const sel of [".sb-badges", ".sb-rail-badges"]) {
-      const box = SB.querySelector(sel);
-      if (!box) continue;
-      box.textContent = "";
-      const list = sel === ".sb-rail-badges" ? items.filter(function (b) { return b.rail; }) : items;
-      for (const b of list) {
-        const span = document.createElement("span");
-        span.className = "sb-badge" + (b.strong ? " sb-badge-strong" : "");
-        span.textContent = sel === ".sb-rail-badges" ? b.rail : b.text;
-        if (b.title) span.title = b.title;
-        box.appendChild(span);
-      }
+    for (const t of TABS) {
+      const tab = SB.getElementById("tab-" + t.id);
+      const panel = SB.getElementById("panel-" + t.id);
+      const on = t.id === id;
+      tab.setAttribute("aria-selected", on ? "true" : "false");
+      tab.tabIndex = on ? 0 : -1;
+      panel.hidden = !on;
+      if (on && focus) tab.focus();
     }
+    try {
+      if (focus && api && api.storage && api.storage.local) api.storage.local.set({ sidebarTab: id });
+    } catch (_) {}
+  }
+
+  function setTabCount(id, n) {
+    const tab = SB && SB.getElementById("tab-" + id);
+    if (tab) tab.querySelector(".sb-tab-count").textContent = n ? String(n) : "";
+  }
+
+  // Empty-state text shows only while a tab has nothing in it.
+  function refreshPanels() {
+    if (!SB) return;
+    for (const t of TABS) {
+      const panel = SB.getElementById("panel-" + t.id);
+      const filled = SLOTS[t.id].some(function (s) { const slot = SB.getElementById("slot-" + s); return slot && slot.childElementCount; });
+      panel.querySelector(".panel-empty").hidden = filled;
+    }
+    const imgs = byId("wrapper-img-attachments");
+    const nested = byId("wrapper-nested-eml");
+    setTabCount("previews", (imgs ? imgs.querySelectorAll(".att-thumb").length : 0) + (nested ? nested.querySelectorAll(".nest-block").length : 0));
+  }
+
+  function setStatus(text) {
+    const el = SB && SB.querySelector(".sb-status");
+    if (!el) return;
+    el.textContent = text;
+    clearTimeout(statusTimer);
+    if (text) statusTimer = setTimeout(function () { el.textContent = ""; }, 2500);
+  }
+
+  function setRailCount(n) {
+    const el = SB && SB.querySelector(".sb-rail-count");
+    if (el) el.textContent = n ? String(n) : "";
   }
 
   // Overlays (lightbox, original-wrapper panel) live in the sidebar's shadow root too.
@@ -187,9 +281,34 @@
     }
   }
 
+  let returnFocus = null;
+
   function closePanel() {
     const el = byId("wrapper-unwrap-panel");
     if (el) el.remove();
+    document.removeEventListener("keydown", escClose, true);
+    if (returnFocus && returnFocus.isConnected) returnFocus.focus();
+    returnFocus = null;
+  }
+
+  function escClose(e) {
+    if (e.key !== "Escape") return;
+    e.preventDefault();
+    e.stopPropagation();
+    closePanel();
+  }
+
+  // Overlays behave as modal dialogs: labelled, focused on open, Esc closes them and
+  // focus goes back where it was.
+  function openDialog(panel, label) {
+    returnFocus = (SB && SB.activeElement) || document.activeElement;
+    panel.setAttribute("role", "dialog");
+    panel.setAttribute("aria-modal", "true");
+    panel.setAttribute("aria-label", label);
+    panelRoot().appendChild(panel);
+    document.addEventListener("keydown", escClose, true);
+    const first = panel.querySelector("button");
+    if (first) first.focus();
   }
 
   // Clipboard writes from the message pane fail silently in Thunderbird, so the
@@ -226,7 +345,7 @@
     panel.id = "wrapper-unwrap-panel";
     panel.innerHTML =
       '<div class="wup-card"><h3>Original wrapper</h3><p class="wup-vendor"></p><label>Wrapped URL</label><textarea readonly id="wup-orig"></textarea><label>Unwrapped URL</label><textarea readonly id="wup-clean"></textarea><div class="wup-actions"><button type="button" id="wup-copy-orig">Copy wrapped</button><button type="button" id="wup-copy-clean">Copy unwrapped</button><button type="button" id="wup-more">Keep unwrapping…</button><button type="button" id="wup-close">Close</button></div></div>';
-    panelRoot().appendChild(panel);
+    openDialog(panel, "Original wrapper");
     panel.querySelector(".wup-vendor").textContent = info.vendor || "security wrapper";
     panel.querySelector("#wup-orig").value = info.original;
     panel.querySelector("#wup-clean").value = info.unwrapped || "";
@@ -257,7 +376,7 @@
     panel.id = "wrapper-unwrap-panel";
     panel.innerHTML =
       '<div class="wup-card"><h3>Keep unwrapping</h3><p class="wup-vendor" id="wup-status">Current URL after automatic unwrapping. Unwrap again tries any layer left; edit the URL to try another one.</p><ol class="wup-steps" id="wup-steps"></ol><label>Current URL</label><textarea id="wup-current"></textarea><div class="wup-actions"><button type="button" id="wup-again">Unwrap again</button><button type="button" id="wup-copy">Copy</button><button type="button" id="wup-open">Open</button><button type="button" id="wup-close">Close</button></div></div>';
-    panelRoot().appendChild(panel);
+    openDialog(panel, "Keep unwrapping");
     const currentEl = panel.querySelector("#wup-current");
     const stepsEl = panel.querySelector("#wup-steps");
     const statusEl = panel.querySelector("#wup-status");
@@ -332,7 +451,7 @@
     bar.id = "wrapper-ics-banner";
     const title = document.createElement("div");
     title.className = "ics-title";
-    title.textContent = "Calendar invite links (" + urls.length + ")";
+    title.textContent = "Calendar invite links";
     bar.appendChild(title);
     for (const raw of urls) {
       const out = WrapperUnwrap.unwrapAll(raw);
@@ -365,15 +484,14 @@
     insertBanner(bar);
   }
 
-  // Each section has a fixed slot in the sidebar, whichever arrives first.
+  // Each section has a fixed slot in its tab, whichever arrives first.
   function insertBanner(el) {
     const root = sidebar();
     const slot = root.getElementById("slot-" + el.id);
     if (!slot) return;
     slot.textContent = "";
     slot.appendChild(el);
-    const empty = root.querySelector(".sb-empty");
-    if (empty) empty.remove();
+    refreshPanels();
   }
 
   function cidMap(images) {
@@ -503,7 +621,7 @@
     row.className = "nest-qr";
     const lbl = document.createElement("div");
     lbl.className = "nest-qr-lbl";
-    lbl.textContent = "QR URL (extracted, not peeled)";
+    lbl.textContent = "Decoded as-is (wrappers not removed)";
     row.appendChild(lbl);
     if (looksLikeUrl(payload)) {
       const href = /^https?:\/\//i.test(payload) ? payload : "http://" + payload;
@@ -617,6 +735,7 @@
       document.removeEventListener("keydown", onKey, true);
       closePanel();
     }
+    panel.querySelector("img").setAttribute("tabindex", "-1");
     function toggleSize() {
       actual = !actual;
       render();
@@ -630,7 +749,7 @@
       if (e.target === panel) close();
     });
     document.addEventListener("keydown", onKey, true);
-    panelRoot().appendChild(panel);
+    openDialog(panel, "Image viewer");
     render();
   }
 
@@ -650,8 +769,12 @@
     bar.id = "wrapper-img-attachments";
     const title = document.createElement("div");
     title.className = "ics-title";
-    title.textContent = "Image attachments (" + list.length + ") — click to preview";
+    title.textContent = "Image attachments";
     bar.appendChild(title);
+    const hint = document.createElement("p");
+    hint.className = "empty";
+    hint.textContent = "Open an image to see it full size; arrow keys move between images.";
+    bar.appendChild(hint);
     const grid = document.createElement("div");
     grid.className = "att-grid";
     const group = list.map(function (it) {
@@ -681,7 +804,7 @@
         attachmentQr[String(data).trim()] = true;
         noteQr("in the attachment " + (it.name || "(image)"), data, "QR inside a file: consider Payload → Docuphish");
         const row = qrRow(data);
-        row.querySelector(".nest-qr-lbl").textContent = "QR in " + (it.name || "attachment") + " (extracted, not peeled)";
+        row.querySelector(".nest-qr-lbl").textContent = "QR in " + (it.name || "attachment") + ", decoded as-is";
         qrBox.appendChild(row);
       });
     });
@@ -722,7 +845,7 @@
       box.appendChild(phoneRow(num, source));
     }
     const fromText = extract((msg.text || "") + "\n" + htmlToText(msg.html || ""));
-    for (const n of fromText) add(n, "Phone in nested message text");
+    for (const n of fromText) add(n, "Phone number in the attached email");
   }
 
   function showNested(messages) {
@@ -744,15 +867,10 @@
       art.className = "nest-block";
       const h = document.createElement("div");
       h.className = "nest-title";
-      h.textContent = "Nested message (" + (idx + 1) + ")";
+      h.textContent = msg.subject || "(no subject)";
       const who = document.createElement("div");
       who.className = "nest-who";
-      who.textContent =
-        (msg.filename ? msg.filename + " · " : "") +
-        "Subject: " +
-        (msg.subject || "(no subject)") +
-        " · From: " +
-        (msg.from || "(unknown)");
+      who.textContent = "From " + (msg.from || "(unknown sender)") + (msg.filename ? ", attached as " + msg.filename : "");
       const inner = document.createElement("div");
       const hasBody = hasMeaningfulBody(msg);
       inner.className = "nest-inner" + (hasBody ? "" : " nest-tight");
@@ -838,45 +956,23 @@
     bar.id = "wrapper-qr-banner";
     const title = document.createElement("div");
     title.className = "ics-title";
-    title.textContent = "QR in this message (" + fresh.length + ") — extracted, not peeled";
+    title.textContent = "QR codes in this message";
     bar.appendChild(title);
     for (const payload of fresh) bar.appendChild(qrRow(payload));
     insertBanner(bar);
   }
 
 
-  // --- Insights panel ---------------------------------------------------------------
-  // Hints computed by signals.js in the background. Every value shown comes from the
+  // --- Insights: overview, Evidence and Indicators tabs ------------------------------
+  // Data comes from signals.js in the background. Every value shown comes from the
   // message, so it is written with textContent only.
   const qrHints = [];
+  let layersData = [];
+  let selectedLayer = 0;
 
   function noteQr(where, payload, hint) {
     qrHints.push({ where: where, payload: String(payload || ""), hint: hint });
-    const box = SB && SB.querySelector("#wrapper-signals .sig-qr");
-    if (box) renderQrHints(box);
-  }
-
-  function renderQrHints(box) {
-    box.textContent = "";
-    if (!qrHints.length) {
-      box.hidden = true;
-      return;
-    }
-    box.hidden = false;
-    const h = document.createElement("div");
-    h.className = "sig-sub";
-    h.textContent = "QR codes found";
-    box.appendChild(h);
-    const ul = document.createElement("ul");
-    for (const q of qrHints) {
-      const li = document.createElement("li");
-      li.appendChild(document.createTextNode("QR " + q.where + " — " + q.hint + ": "));
-      const code = document.createElement("code");
-      code.textContent = q.payload;
-      li.appendChild(code);
-      ul.appendChild(li);
-    }
-    box.appendChild(ul);
+    if (layersData.length) renderEvidence(layersData[selectedLayer]);
   }
 
   function el(tag, cls, text) {
@@ -886,155 +982,308 @@
     return e;
   }
 
+  function flash(button, label) {
+    const old = button.textContent;
+    button.textContent = label;
+    button.classList.add("done");
+    setTimeout(function () {
+      button.textContent = old;
+      button.classList.remove("done");
+    }, 1400);
+  }
+
+  function copyWithFeedback(text, button, what) {
+    copyText(text);
+    setStatus("Copied " + (what || "value"));
+    if (button) flash(button, "Copied");
+  }
+
+  // An exact value: click copies it; long values are clamped to three lines.
+  function valueButton(text, what) {
+    const b = el("button", "value", text);
+    b.type = "button";
+    b.title = "Copy " + (what || "value");
+    b.setAttribute("aria-label", "Copy " + (what || "value") + ": " + text);
+    b.addEventListener("click", function () { copyWithFeedback(text, null, what); });
+    return b;
+  }
+
+  function copyButton(text, what) {
+    const b = el("button", "copy", "Copy");
+    b.type = "button";
+    b.setAttribute("aria-label", "Copy " + (what || "value"));
+    b.addEventListener("click", function () { copyWithFeedback(text, b, what); });
+    return b;
+  }
+
+  function externalLink(text, href) {
+    const a = el("a", null, text);
+    a.href = href;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    rawLinks.add(a);
+    return a;
+  }
+
+  // Up to five dots: filled for strong insights, half for weak ones.
+  function meter(strong, weak) {
+    const m = el("span", "meter");
+    m.setAttribute("role", "img");
+    m.setAttribute("aria-label", strong + " strong, " + weak + " weak");
+    for (let i = 0; i < 5; i++) m.appendChild(el("i", i < strong ? "on" : i < strong + weak ? "half" : ""));
+    return m;
+  }
+
+  function splitRoute(name) {
+    const parts = String(name).split(" → ");
+    return { leaf: parts[parts.length - 1], family: parts.slice(0, -1).join(" → ") };
+  }
+
+  function group(title, count, open) {
+    const d = el("details", "group");
+    d.open = open !== false;
+    const s = el("summary");
+    s.appendChild(el("span", "group-title", title));
+    if (count != null) s.appendChild(el("span", "group-count", String(count)));
+    d.appendChild(s);
+    const ul = el("ul", "list");
+    d.appendChild(ul);
+    return { node: d, list: ul };
+  }
+
   function signalItem(sig) {
-    const li = el("li");
-    li.appendChild(el("span", "sig-str sig-" + (sig.strength === "strong" ? "strong" : "weak"), sig.strength));
-    li.appendChild(document.createTextNode(" " + sig.label));
-    if (sig.evidence) {
-      li.appendChild(document.createTextNode(" "));
-      li.appendChild(el("code", null, sig.evidence));
-    }
+    const li = el("li", "item " + (sig.strength === "strong" ? "strong" : "weak"));
+    const label = el("span", "item-label");
+    label.appendChild(el("span", "strength", sig.strength === "strong" ? "Strong" : "Weak"));
+    label.appendChild(document.createTextNode(sig.label));
+    li.appendChild(label);
+    if (sig.evidence) li.appendChild(valueButton(sig.evidence, "evidence"));
     return li;
   }
 
-  function section(title, items, render) {
-    const box = el("div", "sig-section");
-    box.appendChild(el("div", "sig-sub", title));
-    const ul = el("ul");
-    for (const it of items) ul.appendChild(render(it));
-    box.appendChild(ul);
-    return box;
+  function renderOverview(res) {
+    const ov = sidebar().getElementById("sb-overview");
+    ov.textContent = "";
+    if (layersData.length > 1) {
+      const seg = el("div", "ov-layers");
+      seg.setAttribute("role", "group");
+      seg.setAttribute("aria-label", "Message analysed");
+      layersData.forEach(function (l, i) {
+        const b = el("button", "ov-layer", l.layer === "outer" ? "Opened message" : "Attached email" + (layersData.length > 2 ? " " + i : ""));
+        b.type = "button";
+        b.title = l.label || "";
+        b.setAttribute("aria-pressed", i === selectedLayer ? "true" : "false");
+        b.addEventListener("click", function () {
+          selectedLayer = i;
+          renderAll();
+        });
+        seg.appendChild(b);
+      });
+      ov.appendChild(seg);
+    }
+    for (const n of res.notes || []) ov.appendChild(el("p", "callout", n));
+    ov.appendChild(el("h2", "ov-heading", "Where the evidence points"));
+    const routes = res.routes.slice(0, 4);
+    if (routes.length) {
+      const ul = el("ul", "ov-routes");
+      for (const r of routes) {
+        const li = el("li", "ov-route");
+        const name = el("span", "ov-route-name");
+        const parts = splitRoute(r.name);
+        name.appendChild(document.createTextNode(parts.leaf));
+        name.appendChild(el("span", "ov-route-family", parts.family));
+        li.appendChild(name);
+        const right = el("span", "ov-route-meter");
+        const weak = r.signals.length - r.strong;
+        right.appendChild(meter(r.strong, weak));
+        right.appendChild(el("span", null, [r.strong ? r.strong + " strong" : "", weak ? weak + " weak" : ""].filter(Boolean).join(", ")));
+        li.appendChild(right);
+        ul.appendChild(li);
+      }
+      ov.appendChild(ul);
+    } else {
+      ov.appendChild(el("p", "ov-none", "No route stands out. Check the technical signals and the domains to verify."));
+    }
+    const actions = el("div", "ov-actions");
+    const copy = el("button", "btn btn-primary", "Copy summary");
+    copy.type = "button";
+    copy.title = "Copy the analyst summary for this message";
+    copy.addEventListener("click", function () { copyWithFeedback(res.summary || "", copy, "summary"); });
+    actions.appendChild(copy);
+    const meta = [];
+    if (res.language) meta.push(res.language);
+    if (res.sublime && res.sublime.length) meta.push(res.sublime.length + " Sublime rule" + (res.sublime.length === 1 ? "" : "s"));
+    if (meta.length) actions.appendChild(el("span", "ov-meta", meta.join(", ")));
+    ov.appendChild(actions);
   }
 
-  function renderLayer(res, open) {
-    const det = el("details", "sig-layer");
-    det.open = !!open;
-    const sum = el("summary");
-    sum.appendChild(el("span", "sig-layer-name", res.label || (res.layer === "outer" ? "Opened message" : "Attached email")));
-    const top = res.routes.slice(0, 3);
-    for (const r of top) sum.appendChild(el("span", "sig-chip" + (r.strong ? " sig-chip-strong" : ""), r.name.replace(/^Malicious → /, "") + " · " + r.signals.length));
-    if (!top.length) sum.appendChild(el("span", "sig-chip sig-chip-none", "no routes stand out"));
-    if (res.sublime && res.sublime.length) sum.appendChild(el("span", "sig-chip sig-chip-sublime", "Sublime · " + res.sublime.length));
-    if (res.language) sum.appendChild(el("span", "sig-chip sig-chip-none", res.language));
-    det.appendChild(sum);
-
-    for (const n of res.notes || []) det.appendChild(el("p", "sig-note", n));
-    for (const r of res.routes) {
-      const box = el("div", "sig-route");
-      const head = el("div", "sig-route-name", r.name);
-      head.appendChild(el("span", "sig-count", r.signals.length + " insight" + (r.signals.length === 1 ? "" : "s") + (r.strong ? " · " + r.strong + " strong" : "")));
-      box.appendChild(head);
-      const ul = el("ul");
-      for (const sig of r.signals) ul.appendChild(signalItem(sig));
-      box.appendChild(ul);
-      det.appendChild(box);
-    }
-    if (res.sublime && res.sublime.length) {
-      det.appendChild(
-        section("Sublime Security rules matched (offline ports)", res.sublime, function (m) {
-          const li = el("li");
-          li.appendChild(el("span", "sig-str sig-sev-" + (m.severity || "low"), m.severity || "rule"));
-          li.appendChild(document.createTextNode(" "));
-          const a = el("a", null, m.name);
-          a.href = m.url;
-          a.target = "_blank";
-          a.rel = "noopener noreferrer";
-          rawLinks.add(a);
-          li.appendChild(a);
-          if (m.evidence) {
-            li.appendChild(document.createTextNode(" "));
-            li.appendChild(el("code", null, m.evidence));
-          }
-          if (m.routeHint) li.appendChild(el("div", "sig-hint", "→ " + m.routeHint));
-          return li;
-        })
-      );
-    }
-    if (res.general.length) det.appendChild(section("Technical signals", res.general, signalItem));
-    if (res.verify.length) {
-      const rdapNote = res.rdap === "pending" ? " · looking up domain ages…" : res.rdap === "off" ? " · enable “Look up domain age” in the PeelScout button" : res.rdap === "no-permission" ? " · the domain-age permission is still pending" : "";
-      det.appendChild(
-        section("Verify" + rdapNote, res.verify, function (v) {
-          const li = el("li");
-          li.appendChild(el("code", null, v.what));
-          li.appendChild(document.createTextNode(" — " + v.why + " "));
-          if (v.link) {
-            const a = el("a", null, "whois.com");
-            a.href = v.link;
-            a.target = "_blank";
-            a.rel = "noopener noreferrer";
-            rawLinks.add(a);
-            li.appendChild(a);
-          }
-          return li;
-        })
-      );
-    }
-    const cat = el("div", "sig-section");
-    cat.appendChild(el("div", "sig-sub", "Candidates to mark (only if the route is supported)"));
-    if (res.iocs.length) {
-      const table = el("table", "sig-iocs");
-      const hr = el("tr");
-      for (const t of ["Type", "Exact value", "Reason"]) hr.appendChild(el("th", null, t));
-      table.appendChild(hr);
-      for (const i of res.iocs) {
-        const tr = el("tr");
-        tr.appendChild(el("td", null, i.type));
-        const td = el("td");
-        td.appendChild(el("code", null, i.value));
-        tr.appendChild(td);
-        tr.appendChild(el("td", null, i.reason));
-        table.appendChild(tr);
-      }
-      cat.appendChild(table);
-    } else {
-      cat.appendChild(el("p", "sig-none", "None identified with sufficient evidence."));
-    }
-    if (res.senderNote) cat.appendChild(el("p", "sig-note", res.senderNote));
-    det.appendChild(cat);
-
-    const actions = el("div", "wup-actions");
-    const copy = el("button", null, "Copy summary");
-    copy.type = "button";
-    copy.addEventListener("click", function () {
-      copyText(res.summary || "");
-      copy.textContent = "Copied";
-      setTimeout(function () { copy.textContent = "Copy summary"; }, 1500);
+  function renderEvidence(res) {
+    const box = el("div");
+    box.id = "wrapper-signals";
+    let total = 0;
+    res.routes.forEach(function (r, i) {
+      const g = group(r.name.replace(/^Malicious → /, ""), r.signals.length + (r.strong ? ", " + r.strong + " strong" : ""), i < 3);
+      for (const sig of r.signals) g.list.appendChild(signalItem(sig));
+      total += r.signals.length;
+      box.appendChild(g.node);
     });
-    actions.appendChild(copy);
-    det.appendChild(actions);
-    return det;
+    if (res.sublime && res.sublime.length) {
+      const g = group("Sublime Security rules", res.sublime.length);
+      for (const m of res.sublime) {
+        const li = el("li", "item sev-" + (m.severity || "low"));
+        const label = el("span", "item-label");
+        label.appendChild(el("span", "sev", (m.severity || "rule").replace(/^./, function (c) { return c.toUpperCase(); })));
+        const link = externalLink(m.name, m.url);
+        link.className = "rule-link";
+        label.appendChild(link);
+        li.appendChild(label);
+        if (m.routeHint) li.appendChild(el("span", "item-sub", "Points to " + m.routeHint));
+        if (m.evidence) li.appendChild(valueButton(m.evidence, "evidence"));
+        g.list.appendChild(li);
+      }
+      total += res.sublime.length;
+      box.appendChild(g.node);
+    }
+    if (res.general.length) {
+      const g = group("Technical signals", res.general.length);
+      for (const sig of res.general) g.list.appendChild(signalItem(sig));
+      total += res.general.length;
+      box.appendChild(g.node);
+    }
+    if (qrHints.length) {
+      const g = group("QR codes", qrHints.length);
+      for (const q of qrHints) {
+        const li = el("li", "item strong");
+        li.appendChild(el("span", "item-label", "QR " + q.where));
+        li.appendChild(el("span", "item-sub", q.hint));
+        li.appendChild(valueButton(q.payload, "QR content"));
+        g.list.appendChild(li);
+      }
+      box.appendChild(g.node);
+    }
+    if (res.verify.length) {
+      const state = res.rdap === "pending" ? "Looking up domain ages…" : res.rdap === "off" ? "Turn on “Look up domain age” in the PeelScout toolbar button to fill these in." : res.rdap === "no-permission" ? "The domain-age permission is still pending in Thunderbird's main window." : "";
+      const g = group("Verify", res.verify.length);
+      if (state) g.list.appendChild(el("li", "empty", state));
+      for (const v of res.verify) {
+        const li = el("li", "item" + (v.checked ? " done" : ""));
+        li.appendChild(valueButton(v.what, /^https?:/i.test(v.what) ? "URL" : "domain"));
+        const sub = el("span", "item-sub", v.why + " ");
+        if (v.link) sub.appendChild(externalLink("Open whois.com", v.link));
+        li.appendChild(sub);
+        g.list.appendChild(li);
+      }
+      box.appendChild(g.node);
+    }
+    if (!box.childElementCount) box.appendChild(el("p", "empty", "Nothing worth flagging in this message."));
+    insertBanner(box);
+    setTabCount("evidence", total);
+  }
+
+  function renderIndicators(res) {
+    const box = el("div");
+    box.id = "indicators";
+    const cand = group("Candidates to mark", res.iocs.length || null);
+    if (res.iocs.length) {
+      for (const i of res.iocs) {
+        const li = el("li", "item strong");
+        const row = el("div", "ind-row");
+        const left = el("div");
+        left.appendChild(el("span", "ind-type", i.type));
+        left.appendChild(valueButton(i.value, i.type.toLowerCase()));
+        left.appendChild(el("span", "item-sub", i.reason));
+        row.appendChild(left);
+        row.appendChild(copyButton(i.value, i.type.toLowerCase()));
+        li.appendChild(row);
+        cand.list.appendChild(li);
+      }
+    } else {
+      cand.list.appendChild(el("li", "empty", "None identified with sufficient evidence. Mark items only once a route is supported."));
+    }
+    box.appendChild(cand.node);
+    if (res.senderNote) box.appendChild(el("p", "callout", res.senderNote));
+
+    const inv = res.inventory || {};
+    const links = (inv.links || []).filter(function (l) { return l.action || l.flags.length; });
+    const others = (inv.links || []).length - links.length;
+    if ((inv.links || []).length) {
+      const g = group("Links", links.length + (others ? " of " + inv.links.length : ""));
+      for (const l of links) {
+        const li = el("li", "item" + (l.flags.length ? " strong" : ""));
+        const row = el("div", "ind-row");
+        const left = el("div");
+        if (l.text && l.text !== l.url && l.text !== l.href) left.appendChild(el("span", "link-text", l.text));
+        left.appendChild(valueButton(l.url, "URL"));
+        const flags = el("div", "flags");
+        if (l.layers.length) flags.appendChild(el("span", "flag info", "Unwrapped: " + l.layers.join(", ")));
+        for (const f of l.flags) flags.appendChild(el("span", "flag", f));
+        if (flags.childElementCount) left.appendChild(flags);
+        row.appendChild(left);
+        row.appendChild(copyButton(l.url, "URL"));
+        li.appendChild(row);
+        g.list.appendChild(li);
+      }
+      if (others) g.list.appendChild(el("li", "empty", others + " unsubscribe, privacy or same-domain link" + (others === 1 ? " is" : "s are") + " not listed."));
+      box.appendChild(g.node);
+    }
+    if ((inv.addresses || []).length) {
+      const g = group("Addresses", inv.addresses.length, false);
+      for (const a of inv.addresses) {
+        const li = el("li", "item");
+        const row = el("div", "ind-row");
+        const left = el("div");
+        left.appendChild(el("span", "ind-type", a.role));
+        left.appendChild(valueButton(a.value, a.role + " address"));
+        row.appendChild(left);
+        row.appendChild(copyButton(a.value, a.role + " address"));
+        li.appendChild(row);
+        g.list.appendChild(li);
+      }
+      box.appendChild(g.node);
+    }
+    if ((inv.phones || []).length) {
+      const g = group("Phone numbers", inv.phones.length);
+      for (const p of inv.phones) {
+        const li = el("li", "item weak");
+        const row = el("div", "ind-row");
+        row.appendChild(valueButton(p, "phone number"));
+        row.appendChild(copyButton(p, "phone number"));
+        li.appendChild(row);
+        g.list.appendChild(li);
+      }
+      box.appendChild(g.node);
+    }
+    if ((inv.attachments || []).length) {
+      const g = group("Attachments", inv.attachments.length, false);
+      for (const a of inv.attachments) {
+        const li = el("li", "item");
+        li.appendChild(el("span", "item-label", a.name));
+        if (a.type) li.appendChild(el("span", "item-sub", a.type));
+        g.list.appendChild(li);
+      }
+      box.appendChild(g.node);
+    }
+    insertBanner(box);
+    setTabCount("indicators", res.iocs.length);
+  }
+
+  function renderAll() {
+    const res = layersData[selectedLayer];
+    if (!res) return;
+    renderOverview(res);
+    renderEvidence(res);
+    renderIndicators(res);
+    const top = res.routes[0];
+    setRailCount(top ? top.strong : 0);
   }
 
   function showSignals(layers) {
-    const old = byId("wrapper-signals");
-    // Ages arrive in a second pass: keep the sections the analyst opened or closed.
-    const wasOpen = old ? Array.from(old.querySelectorAll(".sig-layer")).map(function (d) { return d.open; }) : null;
-    if (old) old.remove();
     if (!layers || !layers.length) return;
-    const panel = el("div");
-    panel.id = "wrapper-signals";
-    const head = el("div", "sig-head");
-    head.appendChild(el("span", "ics-title", "Insights"));
-    head.appendChild(el("span", "sig-disclaimer", "Hints to review against the classification guide; not a classification."));
-    panel.appendChild(head);
-    // With an attached original, that is what gets analysed: open it, fold the wrapper.
-    const primary = layers.length > 1 ? 1 : 0;
-    const main = layers[primary];
-    const badges = [];
-    if (main.routes[0]) {
-      const r = main.routes[0];
-      badges.push({ text: r.name.replace(/^Malicious → /, "") + " · " + r.signals.length, strong: r.strong > 0, rail: r.strong ? String(r.strong) : "", title: r.name });
-    }
-    if (main.sublime && main.sublime.length) badges.push({ text: "Sublime · " + main.sublime.length, strong: main.sublime.some(function (m) { return /high|critical/.test(m.severity); }) });
-    setBadges(badges);
-    layers.forEach(function (res, i) {
-      panel.appendChild(renderLayer(res, wasOpen && wasOpen.length === layers.length ? wasOpen[i] : i === primary));
-    });
-    const qr = el("div", "sig-section sig-qr");
-    panel.appendChild(qr);
-    renderQrHints(qr);
-    insertBanner(panel);
+    const first = !layersData.length;
+    layersData = layers;
+    // With an attached original, that is what gets analysed first.
+    if (first || selectedLayer >= layers.length) selectedLayer = layers.length > 1 ? 1 : 0;
+    renderAll();
   }
 
   if (api && api.runtime && api.runtime.onMessage) {

@@ -413,6 +413,7 @@
           if (declared || hostIn(l.host, R.ESP_TRACKING)) {
             (tracking[l.reg] = tracking[l.reg] || []).push(l.final);
           } else {
+            (l.flags = l.flags || []).push("Text shows " + shownReg);
             add("phishing", "strong", "Link text shows one domain, the link goes to another", shownReg + " → " + l.final);
             addIoc("URL", l.final, "Link whose text poses as another domain");
           }
@@ -427,6 +428,7 @@
       const key = label + "|" + l.final;
       if (flagged[key]) return;
       flagged[key] = true;
+      (l.flags = l.flags || []).push(label);
       add(route || null, strength, label, l.final);
     }
     for (const l of actionLinks) {
@@ -596,6 +598,19 @@
       notes,
       sublime,
       language: language ? language.name : "",
+      // Everything observed, for the Indicators tab (candidates stay in iocs).
+      inventory: {
+        links: links.map(function (l) {
+          return { text: l.text, href: l.href, url: l.final, host: l.host, layers: l.layers || [], flags: l.flags || [], action: actionLinks.indexOf(l) !== -1 };
+        }),
+        addresses: [
+          { role: "From", value: from.email },
+          { role: "Reply-To", value: replyTo.email },
+          { role: "Return-Path", value: returnPath.email },
+        ].filter(function (a) { return a.value; }),
+        phones: phones,
+        attachments: attachments.map(function (a) { return { name: a.name || "(no name)", type: a.contentType || "" }; }),
+      },
     };
   }
 
