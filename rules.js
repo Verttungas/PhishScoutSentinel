@@ -25,6 +25,9 @@
     firMissingHeaders: "FIR → Missing Headers",
     firInternal: "FIR → Internal Communication",
     firEncrypted: "FIR → Content Encrypted",
+    simulation: "Simulation",
+    dne: "Do Not Engage (hypothesis)",
+    ntd: "No Threat Detected (hypothesis)",
   };
 
   // Free mail / ISP providers (SEA p. 5–7; shaw.ca and gmx.com are named there).
@@ -77,7 +80,43 @@
     linkedin: ["linkedin.com", "lnkd.in"],
     coinbase: ["coinbase.com"],
     binance: ["binance.com"],
+    quickbooks: ["intuit.com", "quickbooks.com", "intuit.ca"],
+    intuit: ["intuit.com", "quickbooks.com", "intuit.ca"],
+    rippling: ["rippling.com"],
+    anthropic: ["anthropic.com", "claude.ai", "claude.com"],
+    scotiabank: ["scotiabank.com", "scotiabank.ca", "scotiabank.com.uy", "scotiabank.com.mx", "scotiabank.cl", "scotiabank.com.pe", "scotiabank.com.co"],
+    desjardins: ["desjardins.com", "desjardins.ca", "dgag.ca"],
+    wellsfargo: ["wellsfargo.com", "wf.com"],
+    usaa: ["usaa.com"],
+    rbcroyalbank: ["rbc.com", "rbcroyalbank.com"],
   };
+
+  // Brands whose name is too short or too common for the domain-substring test above:
+  // matched as words in display names, subjects and text.
+  const BRAND_WORDS = [
+    { name: "TD Bank", re: /\btd ?bank|\btd (canada trust|secure|securities|ameritrade)\b|\btdbank/i, domains: ["td.com", "tdbank.com", "tdcanadatrust.com", "tdsecurities.com", "tdassurance.com"] },
+    { name: "RBC", re: /\brbc\b|royal bank of canada/i, domains: ["rbc.com", "rbcroyalbank.com"] },
+    { name: "National Bank", re: /national bank of canada|banque nationale/i, domains: ["nbc.ca", "bnc.ca"] },
+    { name: "Wells Fargo", re: /wells ?fargo/i, domains: ["wellsfargo.com", "wf.com"] },
+    { name: "Bank of America", re: /bank of america/i, domains: ["bankofamerica.com", "bofa.com"] },
+    { name: "Chase", re: /\bjp ?morgan chase\b|\bchase bank\b/i, domains: ["chase.com", "jpmorgan.com", "jpmorganchase.com"] },
+    { name: "QuickBooks", re: /quick ?books|\bintuit\b/i, domains: ["intuit.com", "quickbooks.com", "intuit.ca"] },
+    { name: "Rippling", re: /\brippling\b/i, domains: ["rippling.com"] },
+    { name: "Interac", re: /\binterac\b/i, domains: ["interac.ca"] },
+  ];
+
+  // Products whose sign-in a credential lure imitates for Link → O365 (incl. Google).
+  const O365_LURE = /microsoft|office ?365|\bm365\b|outlook|sharepoint|onedrive|\bteams\b|exchange|webmail|mailbox|google|gmail|docusign|adobe|dropbox|storage|held (incoming )?(messages|e-?mails)/i;
+
+  // Platforms that send on behalf of an organiser (webinars, events, surveys, CRM):
+  // a Reply-To to the organiser's own domain is how they work.
+  const SEND_PLATFORMS = ["gotowebinar.com", "goto.com", "swoogo.com", "eventbrite.com", "zoom.us", "cvent.com", "on24.com", "constantcontact.com", "mailchimp.com", "mcsv.net", "hubspot.com", "hubspotemail.net", "salesforce.com", "exacttarget.com", "sendgrid.net", "surveymonkey.com", "typeform.com", "docusign.net", "calendly.com", "webex.com", "eventbriteemail.com"];
+
+  // Social profile links in signatures: never the action of an email.
+  const SOCIAL_HOSTS = ["facebook.com", "twitter.com", "x.com", "youtube.com", "linkedin.com", "instagram.com", "tiktok.com", "pinterest.com", "threads.net", "wa.me"];
+
+  // Display names that read like a system notification rather than a person or company.
+  const NOTIFICATION_NAME = /^\W*\(\d+\)\s*\w|\b(held|quarantined?|pending|blocked) (messages?|e-?mails?)\b|\btasks?[-\s]?list\b|\bvoice ?mail\b|\bmail(box)? (admin|support|team|server)\b|\bstorage\b|\bit (support|desk|department)\b|\bhelp ?desk\b/i;
 
   // Hosts whose links are the user's own security tooling or plain infrastructure;
   // never treated as an action destination.
@@ -89,7 +128,7 @@
   const FREE_HOSTING = ["pages.dev", "workers.dev", "r2.dev", "web.app", "firebaseapp.com", "firebasestorage.googleapis.com", "glitch.me", "vercel.app", "netlify.app", "herokuapp.com", "github.io", "ngrok.io", "ngrok-free.app", "ngrok.app", "ipfs.io", "dweb.link", "blob.core.windows.net", "azurewebsites.net", "wixsite.com", "weebly.com", "webflow.io", "square.site", "godaddysites.com", "000webhostapp.com", "sites.google.com", "notion.site", "replit.dev", "repl.co", "onrender.com", "surge.sh", "framer.website", "jimdosite.com", "mystrikingly.com", "carrd.co", "forms.gle", "typeform.com", "jotform.com", "s3.amazonaws.com", "storage.googleapis.com", "digitaloceanspaces.com", "trycloudflare.com"];
 
   // Click-tracking hosts of email platforms (links are rewritten through them).
-  const ESP_TRACKING = ["list-manage.com", "mailchi.mp", "sendgrid.net", "mandrillapp.com", "hubspotlinks.com", "hubspotemail.net", "rs6.net", "mailgun.org", "sparkpostmail.com", "mlsend.com", "mjt.lu", "createsend.com", "cmail19.com", "cmail20.com", "awstrack.me", "klclick.com", "klclick1.com", "klclick2.com", "klclick3.com", "exct.net", "acemlna.com", "acemlnb.com", "acemlnc.com", "acemlnd.com", "sendibt2.com", "sendibt3.com", "mailjet.com", "emarsys.net", "salesforce.com", "pardot.com", "mktoweb.com", "zcsend.net", "icptrack.com"];
+  const ESP_TRACKING = ["yamm-track.appspot.com", "go.swoogo.com", "list-manage.com", "mailchi.mp", "sendgrid.net", "mandrillapp.com", "hubspotlinks.com", "hubspotemail.net", "rs6.net", "mailgun.org", "sparkpostmail.com", "mlsend.com", "mjt.lu", "createsend.com", "cmail19.com", "cmail20.com", "awstrack.me", "klclick.com", "klclick1.com", "klclick2.com", "klclick3.com", "exct.net", "acemlna.com", "acemlnb.com", "acemlnc.com", "acemlnd.com", "sendibt2.com", "sendibt3.com", "mailjet.com", "emarsys.net", "salesforce.com", "pardot.com", "mktoweb.com", "zcsend.net", "icptrack.com"];
 
   const UNSUBSCRIBE = /unsubscribe|opt[\s-]?out|darse de baja|dar de baja|cancelar (la )?suscripci|désabonner|désinscri|se désinscrire|descadastr|cancelar inscri|abmelden|abbestellen|disiscriv|annulla iscrizione|uitschrijven|afmelden|preferenc|privacy|privacidad|privacidade|datenschutz|confidentialit|view (it )?in (your )?browser|ver en (el )?navegador|im browser (an)?zeigen|visualizza nel browser/i;
 
@@ -100,6 +139,12 @@
   // Each entry: [regex, label shown in the panel].
   const PHRASES = {
     o365: [
+      [/held (incoming )?(messages|e-?mails)|messages? (on hold|held for you)|storage (space )?(is )?(full|running low|almost full)|manage storage|mailbox (storage )?(is )?(full|almost full)|e-?mails? (are|were) (on hold|pending delivery)/i, "Mailbox storage / held messages"],
+      [/(pending|upcoming|outstanding) tasks?|tasks? (pending|awaiting) (your )?(approval|action)|action required:|requires your (approval|action)|payroll run.{0,40}(not (yet )?approved|approval)/i, "Pending tasks / action required"],
+      [/\btender (documents?|submission|invitation)|bid submission|request for (tender|proposal)|\bRFP\b|invitation to (tender|bid)|solicitation and bid/i, "Tender / bid documents"],
+      [/annual leave|vacation (request|schedule|approval|list)|leave (request|application|status)|holiday (schedule|approval)/i, "Leave / vacation request"],
+      [/\bW-?9\b|tax form (needed|required)|remittance (statement|advice)/i, "W-9 / remittance statement"],
+      [/(secure|encrypted|protected) e-?mail|web delivery|click (here )?to (open|read|view)( (the|your))? (secure )?(message|document|e-?mail)|log ?in using your e-?mail/i, "Secure email portal"],
       [/project bid|bid (proposal|invitation)|invitaci[oó]n a (licitar|cotizar)|appel d'offres|convite para (licita|cota)|ausschreibung|gara d'appalto|aanbesteding/i, "Project Bid"],
       [/\bsalary\b|salario|\bsueldo\b|ajuste salarial|salaire|sal[aá]rio|gehalt|stipendio|salaris/i, "Salary"],
       [/payroll|n[oó]mina|paie\b|bulletin de salaire|folha de pagamento|holerite|lohnabrechnung|gehaltsabrechnung|busta paga|cedolino|loonstrook/i, "Payroll"],
@@ -117,6 +162,8 @@
       [/sign in to (view|access|open)|log ?in to (view|access|open)|inicia(r)? sesi[oó]n para (ver|acceder|abrir)|connectez-vous pour (voir|acc[eé]der)|fa[cç]a login para (ver|acessar)|melden sie sich an,? um|accedi per (visualizzare|vedere)|log in om (te bekijken|te openen)/i, "Sign in to view"],
     ],
     bec: [
+      [/#?\b(main|best|direct|personal|cell|mobile)\s*#?\s*(cell|number|phone|no\.?)?\s*(to|where i can) reach you|#cell\b|\b(your|ur) (cell|mobile|whatsapp|phone) (number|#|no\.?)|text me (at|on)|reach you (on|at|by) (your )?(cell|mobile|whatsapp)/i, "Asks for a mobile number"],
+      [/\binterac\b|e-?transfer|virement interac|question de s[eé]curit[eé]|security question|zelle\b|payment (to|by) (the )?following (e-?mail|account)/i, "Payment instructions (e-transfer)"],
       [/(update|change|new|updated) (my |our |the )?(bank(ing)?|account|direct deposit|payment) (details|information|info|account)|cambi(o|ar) (de |la |mi )?(cuenta|datos) bancari|changement de (coordonn[eé]es|compte) bancaire|nouveau rib|alterar (os )?dados banc[aá]rios|mudan[cç]a de conta banc[aá]ria|(neue|ge[aä]nderte) bankverbindung|kontoverbindung [aä]ndern|nuove coordinate bancarie|cambio (di )?iban|nieuwe bankgegevens|rekeningnummer (gewijzigd|wijzigen)/i, "Bank details change"],
       [/direct deposit|dep[oó]sito directo|dep[oó]sito direto|virement de salaire/i, "Direct deposit"],
       [/payroll (department|email|team)|forward (it |this )?to payroll|reenviar a n[oó]mina|transmettre (au service )?paie|encaminhar (para )?(o )?rh/i, "Invoice / payroll"],
@@ -128,6 +175,9 @@
       [/keep (this|it) (confidential|between us)|confidencial(mente)? entre nosotros|reste[rz]? confidentiel|mantenha (isso )?em sigilo|bleibt unter uns|resti tra noi|blijft tussen ons/i, "Confidentiality"],
     ],
     recon: [
+      [/family[\s-]office|philanthrop(y|ies|ic) (funders?|partners?|contacts?)|mission-aligned donations?/i, "Family office / philanthropic funders"],
+      [/worth (discussing|a (quick )?(chat|call)|exploring)|open to (a )?(brief|quick|short) (discussion|chat|call)|wanted to (get|reach) (in touch|out)|let me know if you(?:'re| are) open to/i, "Open-ended request to talk"],
+      [/(custom )?(web|mobile)( and (web|mobile))? (app(lication)?s?|development)|senior developers|engineering team|product builds?|dedicated developers|offshore (team|developers)/i, "Software development outsourcing"],
       [/can (i|we) (talk|communicate|chat) (via|by|through|over) (e-?mail|mail)|est-il possible de communiquer par (courriel|e-?mail)|podemos hablar por (correo|email)|podemos (falar|conversar) por e-?mail|k[oö]nnen wir per e-?mail|possiamo (parlare|comunicare) via e-?mail|kunnen we (via|per) e-?mail/i, "“Can we talk by email?”"],
       [/did you (get|receive|see) my (previous |last |earlier )?(e-?mail|message)|recibiste mi (correo|mensaje)|as-tu re[cç]u mon|avez-vous re[cç]u mon|voc[eê] recebeu (o )?meu|haben sie meine (e-?mail|nachricht) erhalten|hai ricevuto (la )?mia|heb je mijn (e-?mail|bericht) ontvangen/i, "“Did you get my email?”"],
       [/(this is|here is) my new (e-?mail|address)|este es mi nuevo (correo|email)|voici ma nouvelle adresse|este [eé] (o )?meu novo e-?mail|das ist meine neue (e-?mail|adresse)|questa [eè] la mia nuova (e-?mail|email)|dit is mijn nieuwe (e-?mail|adres)/i, "“My new email”"],
@@ -143,6 +193,10 @@
       [/line of credit|\bLOC\b|l[ií]nea de cr[eé]dito|ligne de cr[eé]dit|linha de cr[eé]dito|kreditlinie|linea di credito|kredietlijn|family office/i, "Line of credit / family office"],
     ],
     scam419: [
+      [/(\$|usd|us\$|eur|€|£)\s?\d{1,3}(,\d{3}){2,}|\d{1,3}(,\d{3}){2,}(\.\d+)?\s?(usd|dollars|euros?|eur)\b/i, "Sum in the millions written out"],
+      [/(compensation|composition|inheritance|beneficiary|consignment|unclaimed) fund|united nations?\b.{0,60}(fund|approved|release)|\batm (visa |master ?)?card\b|claim (your|the) (fund|payment|prize)|fund (has been )?(approved|released|deposited)/i, "Fund / ATM card release"],
+      [/(collections?|account resolution|recovery) department|outstanding (loan )?balance|settlement amount|payment arrangement|unresolved (loan|debt|balance)|debt collector|escalated for (further )?recovery/i, "Debt collection"],
+      [/raising \$?\s?\d+(\.\d+)?\s?(m|mm|million|k)\b|interested in seeing (our|the) (deck|pitch)|investor deck/i, "Fund-raising pitch"],
       [/inheritance|next of kin|beneficiar(y|io)|herencia|h[eé]ritage|testament|heran[cç]a|erbschaft|nachlass|eredit[aà]|erfenis/i, "Inheritance / beneficiary"],
       [/(\$|usd|us\$|eur|€|£)\s?\d[\d,.]*\s?(million|m\b|millones|millions|milh[oõ]es|millionen|milioni|miljoen)|\d[\d,.]*\s?(million|millones|millions|milh[oõ]es|millionen|milioni|miljoen) (dollars|usd|euros?|de d[oó]lares|de d[oó]lares|dollari|dollar)/i, "Multi-million sum"],
       [/donat(e|ion)|grand piano|piano de cola|donaci[oó]n|don de|doa[cç][aã]o|spende|donazione|donatie/i, "Donation / piano"],
@@ -162,7 +216,7 @@
       [/(call|contact|reach) (us|our (support|billing|team)|the number|now|immediately)|llam(e|a|ar) (al|a nuestro|ahora|inmediatamente)|cont[aá]ct(e|enos) al|appelez(-nous)? (le|au|maintenant)|ligue (para|agora)|rufen sie (uns )?(an|unter)|chiama(teci)? (il|al|ora)|bel (ons|naar|nu)/i, "Asks to call"],
       [/(did not|didn'?t) (authorize|make|recognize) (this|the)|no (reconoce|autoriz[oó])|cancel (this|the) (order|transaction|subscription)|cancelar (el|este) (pedido|cargo|cobro)|vous n'avez pas autoris|annuler (la|cette) (commande|transaction)|n[aã]o (reconhece|autorizou)|nicht autorisiert|stornieren|non (hai|ha) autorizzato|annullare (l'ordine|la transazione)|niet geautoriseerd|annuleren/i, "Cancel an unrecognised charge"],
     ],
-    vishingBrands: /paypal|geek ?squad|norton|mcafee|microsoft|apple|amazon|best ?buy|coinbase|avast|kaspersky|bitdefender|windows defender/i,
+    vishingBrands: /paypal|geek ?squad|norton|mcafee|microsoft|apple|amazon|best ?buy|quick ?books|intuit|coinbase|avast|kaspersky|bitdefender|windows defender/i,
     job: [
       [/(we are|we're) hiring|job (offer|opportunity|position)|remote (job|position|work)|work from home|part[- ]time (job|position)|oferta de (empleo|trabajo)|trabajo (remoto|desde casa)|vacante|offre d'emploi|t[eé]l[eé]travail|vaga de emprego|trabalho (remoto|em casa)|stellenangebot|homeoffice|offerta di lavoro|lavoro da casa|vacature|thuiswerk/i, "Job offer"],
       [/\$\s?\d{2,4} ?(per|\/|a) ?(hour|week|day)|\d{2,4} ?(usd|d[oó]lares|euros?|€) (por|a la|par|pro|all'|per) (hora|semana|d[ií]a|heure|semaine|jour|stunde|woche|tag|ora|settimana|giorno|uur|week|dag)|weekly pay/i, "Hourly / weekly pay"],
@@ -183,6 +237,25 @@
     attachmentMention: /\b(attached|attachment|see (the )?attach|find (the )?enclosed|enclosed (please )?find|adjunto|archivo adjunto|ver adjunto|pi[eè]ce jointe|ci-joint|em anexo|segue anexo|anexo|im anhang|anbei|in allegato|allegato|in de bijlage|bijgevoegd)\b/i,
     forwardedBlock: /-{2,}\s*(forwarded message|original message|mensaje (original|reenviado)|message (d'origine|transf[eé]r[eé])|mensagem (original|encaminhada)|weitergeleitete nachricht|urspr[uü]ngliche nachricht|messaggio (originale|inoltrato)|doorgestuurd bericht|oorspronkelijk bericht)\s*-{2,}|^(from|de|von|da|van):.*\n(sent|enviado|date|fecha|envoy[eé]|gesendet|inviato|verzonden|data|datum):/im,
     reportNarrative: /\b(customer|client(e)?|cliente|kunde|klant|member|cx) (received|got|recibi[oó]|recibió|a re[cç]u|recebeu|erhielt|ha ricevuto|ontving) (a |an |una |un |um |uma |einen |eine |een )?(phone |text )?(call|llamada|appel|liga[cç][aã]o|anruf|chiamata|telefoontje|sms|text message|email|correo|e-?mail)|reporting (a |this )?(fraud|incident|case)|reportar (un |este )?(fraude|incidente|caso)|signaler (une |cette )?(fraude|incident)|reportar (uma |esta )?(fraude)|melden (einen )?(betrug|vorfall)|segnalare (una )?(frode|truffa)|melden van (een )?(fraude|incident)|fue (estafad|defraudad)|was (scammed|defrauded)|\bcall(ed)? (was )?received\b|\b(received|got) a (phone )?call\b|\bcall from \+?\(?\d|\btold (the )?(cx|customer|client|member)\b|\b(cx|customer|client|member) (did ?n[o']t|didn’t|never) (confirm|give|share|provide|click)|\bfraudster|\bscammer|\bbrought (this|it) to my attention|\bforward (this|it) to (fraud|security)|appel (re[çc]u|frauduleux)|a re[çc]u un appel|llamada (recibida|fraudulenta)|recibi[óo] una llamada/i,
+    // An older message quoted on one line ("De: X Enviado: … Para: … Asunto: …").
+    inlineHeader: /\b(from|de|von|da|van):\s.{1,100}?\b(sent|enviado|envoy[eé]|date|gesendet|fecha|inviato|verzonden):\s.{1,80}?\b(to|para|[aà]|an|aan):\s.{1,160}?\b(subject|asunto|objet|betreff|assunto|oggetto|onderwerp):/i,
+    // "On <date>, <name> wrote:" and its translations.
+    replyLine: /^.{0,200}\b(wrote|a [eé]crit|escribi[oó]|escreveu|schrieb|ha scritto|schreef)\s*:\s*$/im,
+    // Lines of a personal-details form ("Your-Full Name:", "Date of birth:").
+    piiField: /^\s*(your[-\s]*)?(full\s*name|name|home address|address|phone( number)?|mobile( number)?|cell( number)?|whats\s?app( number)?|fax( mobile)?( number)?|country|city|state( of origin)?|nationality|occupation|age|sex|gender|birthday|date of birth|next of kin[^:\n]*|marital status|id( card)?|passport)[^:\n]{0,25}:\s*$/gim,
+    // Promised returns ("441 % ROI", "return of 300%").
+    roi: /(\d{2,4}(?:[.,]\d+)?)\s?%\s?(?:roi|return|annual (?:return|yield)|yield|profit)|(?:roi|return|rendement|rendimiento|retorno)\s(?:of|de)\s(\d{2,4})\s?%/i,
+    // Random token strings that defeat spam fingerprints ("YgNG|ROVMZ|y0dr|s6xy…").
+    hashBuster: /(?:\b[A-Za-z0-9]{3,12}\|){4,}[A-Za-z0-9]{3,12}\b/,
+    // Reference numbers bolted onto a subject ("| ID:733-LX-610", "[Ref: 339JYXQM]").
+    subjectRef: /(\||\[|\(|-)\s*(id|ref|reference|case|ticket|ref!)\s*[:#!.]?\s*[A-Z0-9]{2,}[-A-Z0-9]{3,}\]?|\bREF!\s*\d{6,}/i,
+    // Introducing oneself by name in the text.
+    selfIntro: /\b(?:[Ii]['’]?m|[Ii] am|[Mm]y name is|[Tt]his is|[Jj]e m'appelle|[Jj]e suis|[Mm]e llamo|[Mm]i nombre es|[Ss]oy|[Mm]eu nome [eé])\s+([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})?)/,
+    // Greeting followed by one token ("Dear jane.doe,").
+    greeting: /^\s*(?:dear|hi|hello|hey|hola|estimad[oa]|bonjour|ol[aá]|hallo|ciao|beste|good (?:morning|afternoon))\s+([^\s,!:]+)/im,
+    // Where the body asks to write, reply or pay to an address.
+    contactContext: /(contact|write (to|at)|reply (to|at)|send (it|them|your|the|us)? ?(to|at)|e-?mail\s*:|email (him|her|us|me)|e-?mail address|courriel|correo|adresse|reach (me|us|him|her)|get in touch|interac|e-?transfer|paiement|pago|virement|pay (to|by|via))/i,
+    paymentContext: /(interac|e-?transfer|virement|zelle|\bpay (to|by|via)\b|paiement|pago|payment (to|by|via|method|address|details)|remit(tance)? to)/i,
     // A forwarded message that is itself someone reporting what they received.
     reportSubject: /\b(possible|potential|suspected|suspicious|probable)\s+(spam|scam|fraud|phish(ing)?)\b|\bis this (legit(imate)?|real|you|a scam|phishing)\b|\b(spam|scam|fraud|phishing) (at|from|using|claiming|pretending)\b|\bposible (fraude|estafa|spam)|\b(fraude|arnaque|hame[çc]onnage) possible/i,
     // Bank details that make forwarded payment instructions (counted per distinct term).
@@ -204,6 +277,16 @@
   // Words that turn a nearby phone number into the lure's callback number.
   const PHONE_CTA = /\b(call|calling|toll[\s-]?free|dial|helpline|hotline|customer (service|care|support)|support (team|line|desk)|billing (team|department|support)|reach (us|our)|contact (us|our)|llam(e|a|ar|enos)|appel(ez|er)|ligue|anrufen|rufen sie|chiama|bel ons)\b/i;
 
+  // Weak technical signals that still make a message suspicious (for the DNE hypothesis).
+  const SUSPICIOUS_WEAK = /^(Freemail|Authentication failures|Display name|Random-looking|Undisclosed|No To header|Sender header|To shows|Text hidden|Language:|Randomly named|Reference number|Follows up on its own|Asks to write|Old conversation|Link (made only|to an IP|bounces)|IDN|URL shortener|Free hosting|Link on a TLD)/;
+
+  // Traces phishing-simulation platforms leave in Message-IDs and tracking pixels. These
+  // only suggest an exercise; Simulation needs the domain attributed to the vendor from a
+  // current source (guide, step 8). Verified domains go in the popup's settings.
+  const SIMULATION_MARKERS = [
+    { re: /<threatsim-[^@>]*@/i, label: "Message-ID in the format of the ThreatSim simulation platform" },
+  ];
+
   // Attachment types worth a static look for Docuphish (SEA p. 15).
   const DOC_ATTACHMENT = /\.(html?|shtml|xhtml|svg|pdf|htm|mht|mhtml|txt|eml|zip|rar|7z|iso|img|one|docm|xlsm|pptm)$/i;
   const HTML_ATTACHMENT = /\.(html?|shtml|xhtml|svg|mht|mhtml)$/i;
@@ -211,5 +294,6 @@
   return {
     ROUTES, FREEMAIL, MULTI_LEVEL_SUFFIXES, BRANDS, DEFENSIVE_HOSTS, SHORTENERS, FREE_HOSTING, ESP_TRACKING, UNSUBSCRIBE,
     EXEC_TITLES, PHRASES, DOC_ATTACHMENT, HTML_ATTACHMENT, BANNER, DISCLAIMER, PHONE_SIGNATURE, PHONE_CTA,
+    BRAND_WORDS, O365_LURE, SEND_PLATFORMS, SOCIAL_HOSTS, NOTIFICATION_NAME, SIMULATION_MARKERS, SUSPICIOUS_WEAK,
   };
 });

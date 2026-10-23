@@ -228,7 +228,7 @@
   }
 
   // Headers the "Indicios" panel looks at (signals.js).
-  var SIGNAL_HEADERS = ["from", "reply-to", "return-path", "to", "cc", "subject", "date", "message-id", "in-reply-to", "references", "authentication-results", "received"];
+  var SIGNAL_HEADERS = ["from", "sender", "reply-to", "return-path", "to", "cc", "subject", "date", "message-id", "in-reply-to", "references", "authentication-results", "received"];
 
   function parseMessage(raw, depth) {
     var msg = emptyMsg();

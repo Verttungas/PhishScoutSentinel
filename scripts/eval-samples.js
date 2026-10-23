@@ -20,9 +20,11 @@ const N = require(path.join(REPO, "nested.js"));
 const ICS = require(path.join(REPO, "ics.js"));
 
 const args = process.argv.slice(2);
-const root = args.find((a) => !a.startsWith("--"));
+const root = args.find((a, i) => !a.startsWith("--") && !["--json", "--settings"].includes(args[i - 1]));
 const jsonOut = args.includes("--json") ? args[args.indexOf("--json") + 1] : null;
 const verbose = args.includes("--verbose");
+// Optional JSON with the popup's settings: {"simulationDomains": [{"domain", "vendor", "source"}], "orgDomains": []}.
+const settings = args.includes("--settings") ? JSON.parse(fs.readFileSync(args[args.indexOf("--settings") + 1], "utf8")) : {};
 if (!root) {
   console.error("Usage: node scripts/eval-samples.js <samples folder> [--json out.json] [--verbose]");
   process.exit(1);
@@ -90,7 +92,7 @@ function analyse(raw) {
       push(m.nested);
     }
   })(top.nested);
-  if (S.analyzeAll) return S.analyzeAll(outer, nested.slice(0, 5), icsUrls(raw));
+  if (S.analyzeAll) return S.analyzeAll(outer, nested.slice(0, 5), icsUrls(raw), settings);
   // Engines before analyzeAll: outer layer plus attached messages.
   const layers = [S.analyze(Object.assign({ label: "Opened message" }, outer))];
   for (const m of nested.slice(0, 5)) layers.push(S.analyze(Object.assign({ layer: "nested" }, m)));
@@ -111,7 +113,9 @@ for (const file of walk(root, []).sort()) {
   }
   // The sidebar opens on the second layer when there is one (attached or forwarded original).
   const shown = layers[layers.length > 1 ? 1 : 0];
-  const malicious = shown.routes.filter((r) => r.key.indexOf("fir") !== 0);
+  const NOT_MALICIOUS = ["simulation", "dne", "ntd"];
+  const malicious = shown.routes.filter((r) => r.key.indexOf("fir") !== 0 && !NOT_MALICIOUS.includes(r.key));
+  const hint = shown.routes.find((r) => ["simulation", "dne", "ntd"].includes(r.key));
   rows.push({
     file: rel,
     truth,
@@ -120,7 +124,9 @@ for (const file of walk(root, []).sort()) {
     top: shown.routes[0] ? shown.routes[0].key : null,
     topStrong: shown.routes[0] ? shown.routes[0].strong : 0,
     topMalicious: malicious[0] ? malicious[0].key : null,
-    topMaliciousStrong: malicious[0] ? malicious[0].strong : 0,
+    hint: hint ? hint.key + (hint.strong ? "*" : "") : null,
+    // Counted only when the malicious route is what the sidebar puts first.
+    topMaliciousStrong: malicious[0] && malicious[0] === shown.routes[0] ? malicious[0].strong : 0,
     routes: shown.routes.map((r) => r.key + (r.strong ? "*" + r.strong : "") + "/" + r.signals.length),
     iocs: shown.iocs.map((i) => i.type + ": " + i.value),
     general: shown.general.filter((g) => g.strength === "strong").map((g) => g.label),
@@ -144,6 +150,8 @@ const score = {
   maliciousAnywhere: mal.filter((r) => r.routes.some((x) => x.split(/[*/]/)[0] === r.expected)).length + " / " + mal.length,
   firTop1: rows.filter((r) => r.expected === "fir" && hit(r)).length + " / " + rows.filter((r) => r.expected === "fir").length,
   nonMaliciousWithStrongMaliciousRoute: non.filter((r) => r.topMaliciousStrong).length + " / " + non.length,
+  // DNE → dne, NTD → ntd, Simulation → simulation hypothesis on the analysed layer.
+  nonMaliciousHypothesis: rows.filter((r) => r.expected === null && r.hint && r.hint.replace("*", "") === r.truth.split("/")[0].toLowerCase()).length + " / " + rows.filter((r) => r.expected === null).length,
   candidatesOnNonMalicious: non.reduce((n, r) => n + (r.iocs ? r.iocs.length : 0), 0),
   errors: rows.filter((r) => r.error).length,
 };

@@ -253,7 +253,7 @@ async function collectImageAttachments(messageId) {
   return out;
 }
 
-const SIGNAL_HEADERS = ["from", "reply-to", "return-path", "to", "cc", "subject", "date", "message-id", "in-reply-to", "references", "authentication-results", "received"];
+const SIGNAL_HEADERS = ["from", "sender", "reply-to", "return-path", "to", "cc", "subject", "date", "message-id", "in-reply-to", "references", "authentication-results", "received"];
 
 async function sha256Hex(bytes) {
   try {
@@ -318,6 +318,23 @@ async function collectOuterLayer(messageId) {
   return layer;
 }
 
+// Team settings from the popup: "domain | vendor | source" lines and plain domains.
+async function teamSettings() {
+  try {
+    const st = await messenger.storage.local.get(["simulationDomainsText", "orgDomainsText"]);
+    const lines = (t) => String(t || "").split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+    return {
+      simulationDomains: lines(st.simulationDomainsText).map((l) => {
+        const [domain, vendor, source] = l.split("|").map((x) => (x || "").trim());
+        return { domain: domain.toLowerCase().replace(/^\*\./, ""), vendor: vendor || "", source: source || "" };
+      }).filter((e) => /^[a-z0-9.-]+\.[a-z]{2,}$/.test(e.domain)),
+      orgDomains: lines(st.orgDomainsText).map((l) => l.toLowerCase().replace(/^@|^\*\./, "")).filter((d) => /^[a-z0-9.-]+\.[a-z]{2,}$/.test(d)),
+    };
+  } catch (_) {
+    return {};
+  }
+}
+
 // Layers for the sidebar: the opened message (or, for a report with the original
 // forwarded in its body, the report and the rebuilt original) and attached messages.
 async function analyzeLayers(outer, nested, icsUrls) {
@@ -331,7 +348,7 @@ async function analyzeLayers(outer, nested, icsUrls) {
       }
       withHashes.push(Object.assign({}, m, { files }));
     }
-    return PeelSignals.analyzeAll(outer, withHashes, icsUrls);
+    return PeelSignals.analyzeAll(outer, withHashes, icsUrls, await teamSettings());
   } catch (_) {
     return [];
   }

@@ -108,10 +108,10 @@ test("missing attachment mention and missing headers", () => {
 test("plain marketing mail stays quiet", () => {
   const res = S.analyze({
     layer: "nested",
-    headers: { from: "News <news@shop.example>", subject: "Our autumn collection", received: "x", "authentication-results": "spf=pass dkim=pass dmarc=pass" },
+    headers: { from: "News <news@shop.example>", to: "me@home.example", subject: "Our autumn collection", received: "x", "authentication-results": "spf=pass dkim=pass dmarc=pass" },
     html: '<p>Discover our new autumn collection with dozens of styles for the whole family, shipping is free on orders this weekend.</p><a href="https://shop.example/autumn">Shop now</a><a href="https://shop.example/unsubscribe">Unsubscribe</a>',
   });
-  assert.strictEqual(res.routes.length, 0);
+  assert.deepStrictEqual(res.routes.map((r) => r.key), ["ntd"], "only the No Threat Detected hypothesis");
   assert.strictEqual(res.iocs.length, 0);
 });
 
@@ -119,8 +119,9 @@ test("summary follows the analyst template", () => {
   const res = S.analyze({ layer: "nested", headers: { from: "doris_fleury@hotmail.com", subject: "Doris Fleury", received: "x" }, text: "Allô, Est-il possible de communiquer par courriel ?" });
   const text = S.summary(res);
   assert.match(text, /^\*\*Suggested classification:\*\* pending review/);
-  assert.match(text, /\*\*Mark as malicious:\*\*\nNone identified/);
-  assert.match(text, /Freemail sender/);
+  assert.match(text, /\*\*Mark as malicious:\*\*\n\| Type/);
+  assert.match(text, /doris_fleury@hotmail\.com` \| Freemail sender that carries out/);
+  assert.match(text, /Freemail sender: mark it only/);
 });
 
 test("report wrapper does not inherit routes from the forwarded subject", () => {
@@ -173,12 +174,12 @@ test("Report to the phishing mailbox: the original is rebuilt as its own layer",
     "Pat Doe | Senior Relationship Manager | T: 212 555 0100",
     "",
     "Begin forwarded message:",
-    "From: Servicing Department <noreply@search.example>",
+    "From: Servicing TDbank Department <noreply@search.example>",
     "Date: October 22, 2026 at 4:00:51 PM EDT",
     "To: Client <client@uni.example>",
-    "Subject: Secure Email",
+    "Subject: TD Secure Email",
     "",
-    "Please log in using your email address and password to view the message.",
+    "TD Secure Email: please log in using your email address and password to view the message.",
     "Click here to open <https://tracking.aff.example/aff_c?offer_id=5&url=https://kit.example/cone/1>",
   ].join("\n");
   const layers = S.analyzeAll({ headers: { from: "Pat Doe <pat.doe@bank.example>", to: "Phishing <phishing@bank.example>", subject: "FW: Secure Email", "in-reply-to": "<abc@sim.example>" }, text, attachments: [] }, [], []);
@@ -326,4 +327,153 @@ test("Vishing number found inside the PDF text", () => {
   const v = res.routes.find((r) => r.key === "vishing");
   assert.ok(v && v.strong >= 1);
   assert.ok(res.iocs.some((i) => i.type === "Cellphone" && i.value === "8445550139"));
+});
+
+// --- Identity, threads, Response routes, simulation, hypotheses (P1/P2) ----------------
+
+const strongLabels = (res) => res.general.filter((s) => s.strength === "strong").map((s) => s.label).join(" | ");
+const allLabels = (res) => res.general.map((s) => s.label).join(" | ");
+
+test("Identity: sent to itself, URL fragments in From, date as display name, fake <address>", () => {
+  const self = S.analyze({ layer: "nested", headers: { from: "Pat <pat.q@gmail.com>", to: "Pat <pat.q@gmail.com>", subject: "Document", received: "x" }, text: "Sam shared a document with you." });
+  assert.match(strongLabels(self), /Sent to itself/);
+  const forged = S.analyze({ layer: "nested", headers: { from: '"(3) Held Messages-" <=app%3A%2F%2F&x=1==info@shop.example>', to: "a@b.example", received: "x" }, text: "Storage is Full" });
+  assert.match(strongLabels(forged), /URL fragments/);
+  assert.match(allLabels(forged), /system notification/);
+  const date = S.analyze({ layer: "nested", headers: { from: "03-14-2026 <ops.task9@gmail.com>", to: "a@b.example", received: "x" }, text: "Hi" });
+  assert.match(strongLabels(date), /Display name is a date/);
+  const fake = S.analyze({ layer: "nested", headers: { from: '"Billing Services <Admins_NDg4ODg4>" <postmaster@shop.example>', to: "a@b.example", received: "x" }, text: "Hi" });
+  assert.match(strongLabels(fake), /invented address/);
+});
+
+test("Identity: Bcc mass mailing, delivered-for mismatch, greeting with the address, three names", () => {
+  const bcc = S.analyze({ layer: "nested", headers: { from: "x@y.example", to: "undisclosed-recipients:;", received: "x" }, text: "Hello" });
+  assert.match(allLabels(bcc), /Undisclosed recipients/);
+  const moved = S.analyze({ layer: "nested", headers: { from: "x@y.example", to: "info@gov.example", received: "from a by b for <victim@bank.example>; Thu" }, text: "Hello" });
+  assert.match(allLabels(moved), /delivered for victim@bank\.example/);
+  const greet = S.analyze({ layer: "nested", headers: { from: "HR <hr@x.example>", to: "jane.doe@corp.example", received: "x" }, text: "Dear jane.doe,\nCheck the attached." });
+  assert.match(strongLabels(greet), /local part of their address/);
+  const three = S.analyze({ layer: "nested", headers: { from: "Rachel Moore <kim.ellis77@gmail.com>", to: "a@b.example", received: "x" }, text: "Hi there, I'm Dana Price!" });
+  assert.match(allLabels(three), /three different people/);
+});
+
+test("Lookalikes: brand misspelt by one swap, recipient's organisation imitated", () => {
+  assert.strictEqual(S.lookalikeBrand("wellsfrago.example"), "wellsfargo");
+  assert.strictEqual(S.lookalikeBrand("wellsfargo.com"), null);
+  const res = S.analyze({ layer: "nested", headers: { from: "IT <it@contsoso-corp.example>", to: "me@contoso-corp.example", received: "x" }, text: "Hello", orgDomains: ["contoso-corp.example"] });
+  assert.match(strongLabels(res), /imitates the recipient's organisation/);
+});
+
+test("Filler: a stranger's old thread below the lure, random token strings, bolted-on refs", () => {
+  const quoted = "From: Ann <ann@vendor.example>\nSent: Friday\nTo: Bob <bob@shop.example>\nSubject: RE: renewals\n\n" + "Any news on the renewal? They are close to expiry, please let me know as soon as possible. ".repeat(4) + "\nPhone : 704-555-0112";
+  const res = S.analyze({
+    layer: "nested",
+    headers: { from: "Tasks <a@surf.example>", to: "me@corp.example", subject: "Wellness | ID:482-QZ-117", received: "x" },
+    html: '<a href="https://track.example/c?u=https://kit.example/x"><img src="cid:1"></a><p>Qx7Lm|PWZTR|k2va|m9ub|7H3QA</p><p>' + quoted.replace(/\n/g, "<br>") + "</p>",
+  });
+  const labels = allLabels(res);
+  assert.match(labels, /Old conversation between unrelated people/);
+  assert.match(labels, /Random token string/);
+  assert.match(labels, /Reference number bolted onto the subject/);
+  assert.ok(!res.iocs.some((i) => i.type === "Cellphone"));
+});
+
+test("Fake 'Re:' that quotes only the sender: the quote still counts as the message", () => {
+  const res = S.analyze({
+    layer: "nested",
+    headers: { from: "03-14-2026 <ops.task9@gmail.com>", to: "me@bank.example", subject: "Re: Alex", received: "x", "in-reply-to": "<a@mail.gmail.com>" },
+    text: "Need confirmation, thanks.\n\nOn Sat, 14 Mar 2026 at 09:05, 03-14-2026 <ops.task9@gmail.com> wrote:\n\nGood afternoon,\n\nMain #cell to reach you ?\n\nAlex",
+  });
+  assert.strictEqual(res.routes[0].key, "bec");
+  assert.ok(res.routes[0].strong >= 1);
+  assert.match(allLabels(res), /Follows up on its own earlier message/);
+  assert.ok(res.iocs.some((i) => i.value === "ops.task9@gmail.com"), "freemail sender carrying out the BEC is a candidate");
+});
+
+test("Payment to another freemail address (Interac) → BEC with the payment address as candidate", () => {
+  const res = S.analyze({
+    layer: "nested",
+    headers: { from: "Lawn Care <lawn.care.svc@gmail.com>", to: "info@gov.example", received: "x" },
+    text: "Your 2026 lawn-care invoice is still unpaid.\n\nPaiement par Interac :\n  * Courriel : lawn.billing@gmail.com\n  * Question : Pelouse\n\nPlease confirm your payment by email.",
+  });
+  assert.strictEqual(res.routes[0].key, "bec");
+  assert.ok(res.iocs.some((i) => i.value === "lawn.billing@gmail.com" && /pay to/.test(i.reason)));
+  assert.ok(res.inventory.addresses.some((a) => a.role === "Payment address in the body"));
+});
+
+test("419: the To address is the scammer's contact; implausible ROI beats a short-message probe; PII form", () => {
+  const debt = S.analyze({
+    layer: "nested",
+    headers: { from: "Collections <coll.dept03@outlook.com>", to: "collector.anna@gmail.example.com", received: "x" },
+    text: "COLLECTIONS & ACCOUNT RESOLUTION DEPARTMENT\nYour outstanding loan balance is $2,565.00. Settlement amount: $2,050.00.\nPlease contact Anna.\nEmail: collector.anna@gmail.example.com",
+  });
+  assert.match(strongLabels(debt), /To address is the contact/);
+  const roi = S.analyze({ layer: "nested", headers: { from: "R <r@greenfuel.example>", to: "me@bank.example", subject: "quick question", received: "x" }, text: "We turn farm residue into jet fuel. Expecting a 520 % ROI. Raising $ 25M currently. Interested in seeing our deck?" });
+  assert.strictEqual(roi.routes[0].key, "scam419");
+  const form = S.analyze({ layer: "nested", headers: { from: "x@uni.example", to: "undisclosed-recipients:;", "reply-to": "agent77@gmail.com", received: "x" }, text: "Your compensation fund worth $3,400,000 USD has been approved.\nYour-Full Name:\nYour-Address:\nYour-Phone Number:\nYour-Country:\nYour-Birthday:\n" });
+  assert.strictEqual(form.routes[0].key, "scam419");
+  assert.ok(form.routes[0].strong >= 1);
+  assert.ok(form.iocs.some((i) => i.value === "agent77@gmail.com"), "the Reply-To receives the replies");
+  assert.ok(!form.routes.some((r) => r.key === "bec"), "a diverted reply alone is not BEC");
+});
+
+test("RECON: family-office pitch and dev-shop outreach", () => {
+  const fo = S.analyze({ layer: "nested", headers: { from: "J <j@commerce.example>", to: "d@cu.example", received: "x" }, text: "Hey Sam, wanted to get in touch. Our team has direct contacts at family-office philanthropies. Would that be worth discussing? Thank you, J" });
+  assert.strictEqual(fo.routes[0].key, "recon");
+  const dev = S.analyze({ layer: "nested", headers: { from: "C <c@mail.techco.example>", to: "x@corp.example", received: "x" }, text: "hi, are you expanding your engineering team? we help companies build custom web and mobile applications with senior developers. let me know if you are open to a brief discussion. thanks, team" });
+  assert.strictEqual(dev.routes[0].key, "recon");
+});
+
+test("Webinar platform with the organiser's Reply-To is not a diversion", () => {
+  const res = S.analyze({ layer: "nested", headers: { from: "Lee <noreply@swoogo.com>", "reply-to": "lee@organiser.example", to: "me@bank.example", received: "x", "authentication-results": "spf=pass dkim=pass dmarc=pass" }, html: '<p>Join our virtual forum.</p><a href="https://go.swoogo.com/ls/click?upn=abc">Secure your spot</a><a href="https://go.swoogo.com/unsub">Unsubscribe</a>' });
+  assert.ok(!res.routes.some((r) => r.key === "bec"));
+  assert.strictEqual(res.iocs.length, 0);
+});
+
+test("Secure-message lure of a bank → Link → Phishing; Microsoft storage lure → O365", () => {
+  const bank = S.analyze({ layer: "nested", headers: { from: "Servicing TDbank Department <noreply@search.example>", to: "c@uni.example", subject: "Secure Email", received: "x" }, html: '<p>TD Secure Email. Please log in using your email address to view the message.</p><a href="https://kit.example/l">Click here to open</a>' });
+  assert.strictEqual(bank.routes[0].key, "phishing");
+  const ms = S.analyze({ layer: "nested", headers: { from: "Mail <a@b.example>", to: "c@d.example", received: "x" }, html: '<p>Storage is Full. Your Outlook mailbox has 9 held incoming emails.</p><a href="https://www.google.com/goto?url=CAESXgHrOz">Manage Storage</a>' });
+  assert.strictEqual(ms.routes[0].key, "o365");
+  assert.match(strongLabels(ms), /Google redirect that hides/);
+});
+
+test("Disguised action link without lure words still points to Link → Phishing", () => {
+  const res = S.analyze({ layer: "nested", headers: { from: "x@y.example", to: "a@b.example", received: "x" }, html: '<a href="http://xn--gorka-95a.kit.example/abc">----------------------</a><p>A new approach to memory.</p>' });
+  assert.strictEqual(res.routes[0].key, "phishing");
+  assert.match(strongLabels(res), /punctuation|punycode/);
+});
+
+test("Mail-merge tracker named after the sender is tracking, not a mismatch", () => {
+  const res = S.analyze({ layer: "nested", headers: { from: "L <l@acmefoundation.org>", to: "a@b.example", received: "x" }, html: '<a href="https://acmefoundation-dot-yamm-track.appspot.com/2xYz">acmefoundation.org</a>' });
+  assert.ok(!res.routes.some((r) => r.key === "phishing"));
+});
+
+test("Signature social links are not action links", () => {
+  const res = S.analyze({ layer: "nested", headers: { from: "a@b.example", to: "c@d.example", received: "x" }, html: '<p>Regards</p><a href="https://www.facebook.com/somepage"><img src="cid:fb"></a>' });
+  assert.ok(!res.inventory.links.some((l) => l.action));
+});
+
+test("Simulation: generic marker is a weak hint; a listed domain leads and clears candidates", () => {
+  const generic = S.analyze({ layer: "forwarded", inline: true, headers: { from: "Teams <t@lookalike.example>", to: "e@corp.example", "message-id": "<threatsim-c4322-7481@app.sim.example>" }, html: '<p>You have been added to a group.</p><img src="https://teams.lookalike.example/pixel_c4322.gif">' });
+  const sim = generic.routes.find((r) => r.key === "simulation");
+  assert.ok(sim && !sim.strong);
+  const listed = S.analyze({
+    layer: "nested",
+    headers: { from: "Security <notification@lookalike.example>", to: "e@corp.example", received: "x" },
+    html: '<p>Verify your identity to review the account activity.</p><a href="https://www.sim-portal.example/profile.html?id=1">Review account activity</a>',
+    simulationDomains: [{ domain: "sim-portal.example", vendor: "Vendor X", source: "vendor allowlist page" }],
+  });
+  assert.strictEqual(listed.routes[0].key, "simulation");
+  assert.strictEqual(listed.iocs.length, 0);
+  assert.match(listed.routes[0].signals[0].label, /Vendor X.*vendor allowlist page/);
+});
+
+test("Hypotheses: DNE with suspicious signs and no route; NTD when nothing is off; never above a strong route", () => {
+  const dne = S.analyze({ layer: "nested", headers: { from: "Jo <jo.w4471@gmail.com>", to: "s@bank.example", received: "x", "authentication-results": "spf=pass dkim=fail dmarc=fail" }, text: "Hello, I found your profile and would like to hear how you like working in your field and what the neighbourhood is like for newcomers." });
+  assert.strictEqual(dne.routes[dne.routes.length - 1].key, "dne");
+  const ntd = S.analyze({ layer: "nested", headers: { from: "Ana <ana@firm.example>", to: "v@client.example", received: "x", "authentication-results": "spf=pass dkim=pass dmarc=pass" }, text: "Bonjour, voici le rapport et la facture pour le dossier. Cordialement, Ana" });
+  assert.deepStrictEqual(ntd.routes.map((r) => r.key), ["ntd"]);
+  const strong = S.analyze({ layer: "nested", headers: { from: "x@gmail.com", to: "y@z.example", received: "x" }, text: "Main #cell to reach you?" });
+  assert.ok(!strong.routes.some((r) => r.key === "dne" || r.key === "ntd"));
 });

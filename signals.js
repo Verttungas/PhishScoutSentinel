@@ -164,15 +164,43 @@
   }
 
   // Brand token inside a domain that the brand does not use.
+  // Optimal-string-alignment distance (edits and swaps of neighbouring letters).
+  function editDistance(a, b) {
+    a = String(a || "");
+    b = String(b || "");
+    if (Math.abs(a.length - b.length) > 3) return 9;
+    const d = [];
+    for (let i = 0; i <= a.length; i++) d.push([i]);
+    for (let j = 1; j <= b.length; j++) d[0][j] = j;
+    for (let i = 1; i <= a.length; i++) {
+      for (let j = 1; j <= b.length; j++) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost);
+        if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+      }
+    }
+    return d[a.length][b.length];
+  }
+
+  // Brand token inside a domain that the brand does not use, or the brand misspelt by
+  // one letter (wellsfrago, rnicrosoft…).
   function lookalikeBrand(domain) {
     const d = regDomain(domain);
     if (!d) return null;
-    const name = d.split(".")[0];
+    const name = d.split(".")[0].replace(/-/g, "");
     for (const brand of Object.keys(R.BRANDS)) {
-      if (name.indexOf(brand) === -1) continue;
+      const near = name.indexOf(brand) !== -1 || (brand.length >= 7 && editDistance(name, brand) === 1);
+      if (!near) continue;
       if (R.BRANDS[brand].some(function (o) { return regDomain(o) === d; })) return null;
       return brand;
     }
+    return null;
+  }
+
+  // Brands matched as words (short or common names such as TD), with their domains.
+  function brandWord(text) {
+    const t = String(text || "");
+    for (const b of R.BRAND_WORDS) if (b.re.test(t)) return b;
     return null;
   }
 
@@ -457,6 +485,42 @@
     return out;
   }
 
+  // Where an older message starts below the message itself: a header block, a one-line
+  // header, "On … wrote:" or "-----Original Message-----". -1 when there is none.
+  function quoteStart(text) {
+    const t = String(text || "");
+    const found = [];
+    if (Forwards) {
+      const b = Forwards.findBlocks(t);
+      if (b.length) found.push(b[0].start);
+    }
+    for (const re of [R.PHRASES.inlineHeader, R.PHRASES.replyLine, /-{3,}\s*original message\s*-{3,}/i]) {
+      let at = t.search(re);
+      if (at < 0) continue;
+      // "On Fri, 3 Jun, Name <a@b> wrote:" is sometimes broken over a few lines.
+      if (re === R.PHRASES.replyLine) {
+        const above = t.slice(Math.max(0, at - 200), at);
+        const on = above.search(/(^|\n)\s*(on|le|el|em|am|il|op)\s[^\n]*(\n[^\n]*){0,2}$/i);
+        if (on >= 0) at = at - above.length + on;
+      }
+      found.push(at);
+    }
+    return found.length ? Math.min.apply(null, found) : -1;
+  }
+
+  // Addresses a Received header says the message was delivered for.
+  function deliveredFor(received) {
+    const out = [];
+    const re = /\bfor\s+<?"?([A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/gi;
+    let m;
+    while ((m = re.exec(String(received || "")))) if (out.indexOf(m[1].toLowerCase()) < 0) out.push(m[1].toLowerCase());
+    return out;
+  }
+
+  function nameTokens(s) {
+    return (lower(s).match(/\p{L}{3,}/gu) || []).filter(function (t) { return !/^(the|and|mr|mrs|ms|dr|team|service|services|inc|ltd|llc)$/.test(t); });
+  }
+
   function looksRandomName(name) {
     const base = String(name || "").replace(/\.[a-z0-9]{2,5}$/i, "");
     return (/^[A-Z0-9]{8,}$/.test(base) && /\d.*\d/.test(base) && /[A-Z].*[A-Z]/.test(base)) || /[0-9a-f]{16,}/i.test(base) || /^ATT\d{8,}$/i.test(base);
@@ -487,7 +551,20 @@
     const bodyText = msg.text || htmlToText(msg.html);
     // A report wrapper copies the original's subject; judge the wrapper by its own text.
     const isWrapper = msg.layer === "outer" && (!!msg.hasNestedEml || !!msg.reportWrapper);
-    const ownText = stripBanners(bodyText);
+    // An older message quoted below: often filler (a hijacked or invented thread) whose
+    // words, numbers and language are not the lure's.
+    const quotedAt = msg.reportWrapper ? -1 : quoteStart(bodyText);
+    const ownPart = quotedAt > 0 ? bodyText.slice(0, quotedAt) : bodyText;
+    const quotedPart = quotedAt > 0 ? bodyText.slice(quotedAt) : "";
+    const ownOnly = stripBanners(ownPart);
+    // Who talks in the quote: filler copied from strangers' mail, or the sender's own
+    // earlier message (fake "Re:" threads)?
+    const fromReg0 = regDomain(parseAddress(h.from || msg.from).domain);
+    const knownDomains = [fromReg0].concat((msg.orgDomains || []).map(regDomain), addressesIn(h.to).concat(addressesIn(h.cc)).map(function (a) { return regDomain(a.split("@")[1]); }));
+    const quoteParties = addressesIn(quotedPart).map(function (a) { return regDomain(a.split("@")[1]); });
+    const quoteUnrelated = !!quotedPart && words(quotedPart) > 30 && !quoteParties.some(function (d) { return knownDomains.indexOf(d) >= 0; });
+    // A message that is little more than its own quote keeps the quote.
+    const ownText = !quotedPart || quoteUnrelated || words(ownOnly) >= 15 ? ownOnly : stripBanners(bodyText);
     const text = (isWrapper ? "" : subject + "\n") + ownText;
     const attachments = msg.attachments || [];
     const files = (msg.files || []).filter(function (f) { return f.scan && f.scan.ok; });
@@ -498,12 +575,11 @@
     const actionLinks = links.filter(function (l) {
       // Links to the sender's own site are not action links, unless they redirect elsewhere.
       return l.host && !R.UNSUBSCRIBE.test(l.text + " " + l.href) && !hostIn(l.host, R.DEFENSIVE_HOSTS) &&
+        !(hostIn(l.host, R.SOCIAL_HOSTS) && !l.hops.length) &&
+        !/^https?:\/\/[^\/]*googleusercontent\.com\/mail-sig\//i.test(l.final) &&
+        !(quotedPart && l.text && quotedPart.indexOf(l.text) >= 0 && ownPart.indexOf(l.text) < 0) &&
         !(from.domain && regDomain(from.domain) === l.reg && l.destReg === l.reg && !isFreemail(from.domain));
     });
-    // An old thread quoted below the message (often filler) is not where callback
-    // numbers of the lure live.
-    const quoted = !msg.reportWrapper && Forwards ? Forwards.findBlocks(bodyText) : [];
-    const ownPart = quoted.length ? bodyText.slice(0, quoted[0].start) : bodyText;
     const phoneText = ownPart + (fileText ? "\n" + fileText : "");
     const phones = Phones && Phones.extractPhones ? Phones.extractPhones(phoneText) : [];
     const cbPhones = callbackPhones(phoneText, phones);
@@ -566,6 +642,13 @@
     }
 
     // --- Sender and headers -------------------------------------------------------
+    const toAddrs = addressesIn(h.to);
+    const recipients = toAddrs.concat(addressesIn(h.cc));
+    const isRecipient = function (a) { return recipients.some(function (r) { return lower(r) === lower(a); }); };
+    // The recipient's organisation: the To/Cc domains plus the ones the analyst set up
+    // (and, for a forwarded original, the organisation that reported it).
+    const orgDomains = (msg.orgDomains || []).concat(recipients.map(function (a) { return a.split("@")[1]; }))
+      .map(regDomain).filter(function (d, i, a) { return d && !isFreemail(d) && a.indexOf(d) === i; });
     if (from.email) {
       if (fromFree) add(null, "weak", "Freemail / ISP sender", from.email);
       const look = lookalikeBrand(from.domain);
@@ -577,18 +660,69 @@
         }
       }
       const brandInName = from.name && Object.keys(R.BRANDS).find(function (b) { return lower(from.name).replace(/\s+/g, "").indexOf(b) !== -1; });
+      const wordInName = from.name && brandWord(from.name);
       if (brandInName && officialFor(from.domain) === null) {
         add(null, "strong", "Display name uses the “" + brandInName + "” brand from an unrelated domain", from.raw);
+      } else if (wordInName && wordInName.domains.indexOf(regDomain(from.domain)) < 0) {
+        add(null, "strong", "Display name uses the “" + wordInName.name + "” brand from an unrelated domain", from.raw);
       }
       if (EXEC(from.name) || EXEC(subject)) {
         if (fromFree) add("bec", "strong", "Executive title with a freemail address", from.raw);
         else add("bec", "weak", "Executive title in display name or subject", from.name || subject);
       }
     }
+    // Identity and recipients (mass mailing, forged or invented senders).
+    if (from.email && !msg.reportWrapper) {
+      const local = from.email.split("@")[0];
+      if (toAddrs.length && toAddrs.every(function (a) { return lower(a) === lower(from.email); })) add(null, "strong", "Sent to itself: the real recipients are hidden in Bcc (mass mailing)", from.email);
+      if (/undisclosed[-\s]recipients/i.test(h.to || "")) add(null, "weak", "Undisclosed recipients (mass mailing)", h.to);
+      else if (!h.to && !msg.inline) add(null, "weak", "No To header: the recipients were hidden in Bcc", "");
+      const delivered = deliveredFor(h.received);
+      if (delivered.length && toAddrs.length && !delivered.some(isRecipient)) add(null, "weak", "To shows " + toAddrs[0] + " but the message was delivered for " + delivered[0] + " (Bcc, list or forwarding)", "");
+      if (/%[0-9a-f]{2}|[=&]/i.test(local)) add(null, "strong", "Sender address carries URL fragments (forged From)", from.email);
+      const sender = parseAddress(h.sender || "");
+      if (sender.domain && regDomain(sender.domain) !== regDomain(from.domain)) add(null, "weak", "Sender header on another domain than From", sender.email);
+      if (from.name) {
+        if (/^\s*\d{1,4}[-\/.]\d{1,2}[-\/.]\d{1,4}\s*$/.test(from.name)) add(null, "strong", "Display name is a date, not a person or company", from.raw);
+        if (/[<>]/.test(from.name) && from.name.indexOf("@") === -1) add(null, "strong", "Display name holds an invented address in angle brackets", from.name.slice(0, 120));
+        if (R.NOTIFICATION_NAME.test(from.name)) add(null, "weak", "Display name reads like a system notification", from.raw);
+      }
+      const randomBits = from.domain.split(".").slice(0, -2).concat(local.split(/[._+-]/)).filter(function (p) {
+        return p.length >= 5 && /[b-df-hj-np-tv-z]{5,}/i.test(p.replace(/\d/g, ""));
+      });
+      if (randomBits.length) add(null, "weak", "Random-looking parts in the sender address", randomBits.slice(0, 3).join(", "));
+      const greet = ownText.match(R.PHRASES.greeting);
+      if (greet && /[._\d]/.test(greet[1]) && recipients.some(function (r) { return lower(r.split("@")[0]) === lower(greet[1].replace(/[.;]+$/, "")); })) {
+        add(null, "strong", "Greets the recipient by the local part of their address (mass-generated)", greet[0].trim());
+      }
+      const intro = ownText.match(R.PHRASES.selfIntro);
+      if (intro) {
+        const shownName = nameTokens(from.name);
+        const said = nameTokens(intro[1]);
+        const loc = lower(local);
+        const overlap = said.some(function (t) { return shownName.indexOf(t) >= 0 || loc.indexOf(t) >= 0; }) || shownName.some(function (t) { return loc.indexOf(t) >= 0; });
+        if (shownName.length >= 2 && said.length && !overlap) add(null, "weak", "Display name, address and the name in the text are three different people", from.name + " · " + from.email + " · " + intro[1]);
+      }
+      const fromReg = regDomain(from.domain);
+      for (const org of orgDomains) {
+        const label = org.split(".")[0];
+        if (fromReg === org || label.length < 5) continue;
+        const fromLabel = fromReg.split(".")[0];
+        if (label.length >= 6 && fromLabel !== label && editDistance(fromLabel.replace(/-/g, ""), label) <= 2) {
+          add(null, "strong", "Sender domain imitates the recipient's organisation (" + fromReg + " ≈ " + org + ")", from.email);
+        } else if (lower(from.name).replace(/[\s.-]/g, "").indexOf(label) >= 0 || lower(local).indexOf(label) >= 0) {
+          add(null, "weak", "Uses the name of the recipient's organisation (" + label + ") from an unrelated domain", from.raw);
+        }
+      }
+    }
+    let replyDiverted = false;
     if (replyTo.email && from.email && regDomain(replyTo.domain) !== regDomain(from.domain)) {
-      const strong = isFreemail(replyTo.domain) && !fromFree;
-      add("bec", strong ? "strong" : "weak", "Reply-To diverts the reply to another domain" + (isFreemail(replyTo.domain) ? " (freemail)" : ""), "From: " + from.email + " · Reply-To: " + replyTo.email);
-      addIoc("Email address", replyTo.email, "Reply-To that receives the reply; mark if a Response route is supported");
+      if (hostIn(regDomain(from.domain), R.SEND_PLATFORMS) && !isFreemail(replyTo.domain)) {
+        add(null, "weak", "Sent through " + regDomain(from.domain) + "; replies go to the organiser", replyTo.email);
+      } else {
+        replyDiverted = true;
+        add(null, isFreemail(replyTo.domain) && !fromFree ? "strong" : "weak", "Reply-To diverts the reply to another domain" + (isFreemail(replyTo.domain) ? " (freemail)" : ""), "From: " + from.email + " · Reply-To: " + replyTo.email);
+      }
     }
     if (returnPath.email && from.email && regDomain(returnPath.domain) !== regDomain(from.domain)) {
       add(null, "weak", "Return-Path on another domain (common for bulk senders)", returnPath.email);
@@ -596,7 +730,8 @@
     const auth = parseAuth(h["authentication-results"]);
     const fails = ["spf", "dkim", "dmarc"].filter(function (k) { return /^(fail|softfail|permerror)$/.test(auth[k]); });
     if (h["authentication-results"]) {
-      if (fails.length) add(null, "weak", "Authentication failures: " + fails.map(function (k) { return k.toUpperCase() + "=" + auth[k]; }).join(", "), "A lone fail does not prove an attack; check the header comes from the first trusted hop.");
+      if (fails.length === 1 && fails[0] === "dkim" && /pass$/.test(auth.dmarc)) add(null, "weak", "DKIM failed but DMARC passed (often a gateway that rewrote the body)", "");
+      else if (fails.length) add(null, "weak", "Authentication failures: " + fails.map(function (k) { return k.toUpperCase() + "=" + auth[k]; }).join(", "), "A lone fail does not prove an attack; check the header comes from the first trusted hop.");
     } else if (msg.layer === "nested" && !h.received) {
       add("firMissingHeaders", "weak", "The original has no Received or Authentication-Results headers", "Use only if it prevents a decision.");
     }
@@ -605,7 +740,31 @@
     }
     for (const o of obfuscation([["subject", subject], ["display name", from.name], ["body", ownText.slice(0, 4000)]])) add(null, "strong", o.label, o.evidence);
 
+    // --- Threads and filler ------------------------------------------------------------
+    if (quotedPart && !msg.reportWrapper) {
+      if (quoteUnrelated && orgDomains.indexOf(regDomain(from.domain)) < 0) {
+        add(null, attachments.length || links.some(function (l) { return l.host; }) ? "strong" : "weak", "Old conversation between unrelated people quoted below the message (filler or hijacked thread)", (quoteParties.length ? addressesIn(quotedPart).slice(0, 3).join(", ") : quotedPart.trim().slice(0, 80)));
+      }
+      if (/^(re|aw|rv|res|sv|antw)\s*:/i.test(subject) && from.email) {
+        const reply = quotedPart.match(R.PHRASES.replyLine);
+        if (reply && lower(reply[0]).indexOf(lower(from.email)) >= 0) add(null, "weak", "Follows up on its own earlier message: no reply from the recipient in the thread", reply[0].trim().slice(0, 120));
+      }
+    }
+    const buster = (subject + "\n" + bodyText).match(R.PHRASES.hashBuster);
+    if (buster) add(null, "strong", "Random token string (defeats spam fingerprints)", buster[0].slice(0, 60));
+    const ref = subject.match(R.PHRASES.subjectRef);
+    if (ref && !isWrapper) add(null, "weak", "Reference number bolted onto the subject", ref[0].trim());
+    for (const a of attachments) {
+      if (looksRandomName(a.name)) add(null, "weak", "Randomly named attachment", a.name);
+    }
+
     // --- Links ---------------------------------------------------------------------
+    // A click tracker named after the sender ("acme-dot-yamm-track.appspot.com") is the
+    // sender's own mail-merge tool.
+    const senderLabel = from.domain && !fromFree ? regDomain(from.domain).split(".")[0] : "";
+    function ownTracker(l) {
+      return senderLabel.length >= 5 && l.host !== l.reg && l.host.indexOf(senderLabel) >= 0 && l.reg !== regDomain(from.domain);
+    }
     const tracking = Object.create(null);
     for (const l of links) {
       const shownUrl = l.text.match(/\b(?:https?:\/\/|www\.)[^\s<>"']+|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}(?:\/[^\s<>"']*)?/i);
@@ -617,7 +776,7 @@
           // Click-tracking redirectors carry the destination in a parameter; when that
           // destination is the domain the text shows, it is tracking, not a mismatch.
           const declared = embeddedUrls(l.final).some(function (u) { return regDomain(hostOf(u)) === shownReg; }) || l.destReg === shownReg;
-          if (declared || hostIn(l.host, R.ESP_TRACKING)) {
+          if (declared || hostIn(l.host, R.ESP_TRACKING) || ownTracker(l)) {
             (tracking[l.reg] = tracking[l.reg] || []).push(l.final);
           } else {
             (l.flags = l.flags || []).push("Text shows " + shownReg);
@@ -636,6 +795,7 @@
       if (flagged[key]) return;
       flagged[key] = true;
       (l.flags = l.flags || []).push(label);
+      if (strength === "strong" && !l.strongFlag) l.strongFlag = label;
       add(route || null, strength, label, evidence || l.final);
     }
     // Hosts a link reaches: the one in the email and the ones it redirects to.
@@ -649,7 +809,7 @@
         if (/(^|\.)xn--/.test(t.host)) flagLink(l, "IDN / punycode domain", "strong");
         if (/\.dev$/.test(t.host)) flagLink(l, "URL on .dev (SEA p. 16)", "weak");
         if (hostIn(t.host, R.SHORTENERS) || (Sublime && Sublime.lists.isShortener(t.host))) flagLink(l, "URL shortener", "weak");
-        if (hostIn(t.host, R.FREE_HOSTING) || (Sublime && (Sublime.lists.isFreeFileHost(t.host, t.reg) || Sublime.lists.isFreeSubdomainHost(t.reg) || Sublime.lists.isSelfServicePlatform(t.host, t.reg)))) {
+        if (!ownTracker(l) && !hostIn(t.host, R.ESP_TRACKING) && (hostIn(t.host, R.FREE_HOSTING) || (Sublime && (Sublime.lists.isFreeFileHost(t.host, t.reg) || Sublime.lists.isFreeSubdomainHost(t.reg) || Sublime.lists.isSelfServicePlatform(t.host, t.reg))))) {
           flagLink(l, "Free hosting / file share / site builder often abused", "weak");
         }
         if (Sublime && Sublime.lists.isSuspiciousTld(t.host)) flagLink(l, "Link on a TLD in Sublime's suspicious-TLD list", "weak");
@@ -678,7 +838,10 @@
       }
     }
     const redirected = [];
-    for (const l of actionLinks) checkHosts(l, redirected);
+    for (const l of actionLinks) {
+      if (l.text && !/[\p{L}\p{N}]/u.test(l.text)) flagLink(l, "Link hidden in a line of punctuation", "strong");
+      checkHosts(l, redirected);
+    }
     for (const l of actionLinks) {
       if (!l.imageOnly || l.reg === regDomain(from.domain) || tracking[l.reg]) continue;
       // A logo linking to the same site as the text links is ordinary layout.
@@ -740,20 +903,28 @@
     if (credHits.length) {
       const suspicious = actionLinks.filter(function (l) { return !officialFor(l.host) || redirected.indexOf(l) !== -1; });
       const viaFile = docAttachments.length > 0;
-      const route = viaFile && !suspicious.length ? "docuphish" : "o365";
+      // Link → O365 when the lure imitates a Microsoft/Google (or document-sharing)
+      // sign-in; a bank's or another brand's portal is Link → Phishing.
+      const lureText = foldText(subject + "\n" + from.name + "\n" + text);
+      const claimed = brandWord(lureText) || (Object.keys(R.BRANDS).filter(function (b) { return !/^(microsoft|office365|sharepoint|onedrive|outlook|google|docusign|adobe|dropbox)$/.test(b); })
+        .map(function (b) { return lower(lureText).replace(/\s+/g, "").indexOf(b) >= 0 ? { name: b } : null; }).filter(Boolean)[0]) || null;
+      const msNamed = R.O365_LURE.test(lureText);
+      const linkRoute = claimed && !msNamed ? "phishing" : "o365";
+      const route = viaFile && !suspicious.length ? "docuphish" : linkRoute;
       for (const hit of credHits) add(route, "weak", "Keyword: " + hit.label, "“" + hit.quote + "”");
-      if (suspicious.length && route === "o365") {
-        add("o365", "strong", "Document/access lure linking outside Microsoft/Google", suspicious[0].final);
+      if (suspicious.length && route !== "docuphish") {
+        add(route, "strong", route === "o365" ? "Document/access lure linking outside Microsoft/Google" : "“" + claimed.name + "” sign-in lure linking outside the brand's domains", suspicious[0].final);
         for (const l of suspicious.slice(0, 3)) addIoc("URL", l.final, "Action link of the access lure");
-        verify.push({ what: suspicious[0].final, why: "Check in the VM whether it opens a fake sign-in (O365/Google)." });
+        verify.push({ what: suspicious[0].final, why: route === "o365" ? "Check in the VM whether it opens a fake sign-in (O365/Google)." : "Check in the VM whether it opens a fake " + claimed.name + " sign-in." });
       }
       if (viaFile) {
         add("docuphish", "weak", "The lure comes with attachment(s) to inspect", docAttachments.map(function (a) { return a.name; }).join(", "));
       }
     } else {
-      for (const l of redirected.filter(function (x) { return !x.file; }).slice(0, 2)) {
-        add("phishing", "weak", "Action link hidden behind a redirect", l.final);
-        addIoc("URL", l.final, "Action link that bounces through a redirect");
+      // No lure words, but the action link itself is disguised: Link family evidence.
+      for (const l of actionLinks.filter(function (x) { return x.strongFlag; }).slice(0, 2)) {
+        add("phishing", "weak", "Action link: " + l.strongFlag.charAt(0).toLowerCase() + l.strongFlag.slice(1), l.final);
+        addIoc("URL", l.final, "Disguised action link (" + l.strongFlag + ")");
       }
     }
     for (const a of htmlAttachments) {
@@ -761,18 +932,52 @@
       addIoc("Attachment", a.name || "(no name)", "HTML/SVG attachment; mark if it holds the phish (compute the hash)");
     }
 
-    const becHits = phraseSignals("bec", R.PHRASES.bec, "weak");
-    if (becHits && replyTo.email && regDomain(replyTo.domain) !== regDomain(from.domain)) {
-      add("bec", "strong", "Business request with a diverted reply (Adobe Development precedent)", replyTo.email);
+    // --- Response routes: where the reply, call or payment goes ---------------------
+    const bodyContacts = [];
+    const scanText = ownText + (fileText ? "\n" + fileText : "");
+    const scanLower = lower(scanText);
+    for (const a of addressesIn(scanText)) {
+      const la = lower(a);
+      if (la === lower(from.email) || la === lower(replyTo.email) || bodyContacts.some(function (b) { return lower(b.email) === la; })) continue;
+      const at = scanLower.indexOf(la);
+      const before = scanText.slice(Math.max(0, at - 160), at);
+      if (!R.PHRASES.contactContext.test(before)) continue;
+      const reg = regDomain(a.split("@")[1]);
+      // The sender's own colleagues or support desk are not a diversion.
+      if (reg === regDomain(from.domain) && !fromFree) continue;
+      bodyContacts.push({ email: a, pay: R.PHRASES.paymentContext.test(before), free: isFreemail(reg), isTo: isRecipient(a) });
     }
+    for (const c of bodyContacts) {
+      if (c.isTo) add(null, "strong", "The To address is the contact the body points to (the victims are in Bcc)", c.email);
+      else if (c.pay) add("bec", c.free ? "strong" : "weak", "Asks to pay to an address that is not the sender's", c.email);
+      else add(null, c.free ? "strong" : "weak", "Asks to write to another address" + (c.free ? " (freemail)" : ""), c.email);
+    }
+
+    const becHits = phraseSignals("bec", R.PHRASES.bec, "weak", contentText);
+    const askPhone = matchPhrases(R.PHRASES.bec.filter(function (x) { return /mobile number/.test(x[1]); }), contentText).length;
+    if (askPhone && fromFree) add("bec", "strong", "Asks for a mobile number from a freemail address (SEA p. 7)", from.email);
+    if (becHits && replyDiverted) {
+      add("bec", "strong", "Business request with a diverted reply (Adobe Development precedent)", replyTo.email);
+      if (isFreemail(replyTo.domain)) add("bec", "strong", "Replies go to a freemail mailbox", replyTo.email);
+    }
+
+    const s419 = phraseSignals("scam419", R.PHRASES.scam419, "weak", contentText);
+    const roi = contentText.match(R.PHRASES.roi);
+    const pct = roi ? parseFloat(String(roi[1] || roi[2]).replace(",", ".")) : 0;
+    if (pct >= 100) add("scam419", "strong", "Promises a " + pct + " % return (implausible; guide: 419 even before an advance is asked)", roi[0]);
+    const pii = contentText.match(R.PHRASES.piiField) || [];
+    if (pii.length >= 4) add("scam419", "strong", "Asks for a list of personal details (" + pii.length + " fields)", pii.slice(0, 4).map(function (x) { return x.trim(); }).join(" "));
+    const freeAnswer = fromFree || (replyDiverted && isFreemail(replyTo.domain)) || bodyContacts.some(function (c) { return c.free; });
+    const debt = matchPhrases(R.PHRASES.scam419.filter(function (x) { return /Debt collection/.test(x[1]); }), contentText).length;
+    if (debt && freeAnswer) add("scam419", "strong", "Debt collection run from a freemail address", (bodyContacts.find(function (c) { return c.free; }) || from).email);
+    else if (s419 && freeAnswer) add("scam419", "weak", "Financial proposal answered at a freemail address", (replyDiverted ? replyTo : from).email);
 
     const reconHits = phraseSignals("recon", R.PHRASES.recon, "weak");
     if (!isWrapper && !msg.inline && nWords > 0 && nWords <= 60 && !links.length && !attachments.length) {
-      add("recon", reconHits || /\?/.test(text) ? "strong" : "weak", "Very short message without links or attachments that seeks a reply", nWords + " words");
+      // A short message carrying a business or money pitch is that scam, not a probe.
+      const competing = becHits || s419 || pct >= 100;
+      if (reconHits || /\?/.test(text)) add("recon", competing ? "weak" : "strong", "Very short message without links or attachments that seeks a reply", nWords + " words");
     }
-
-    const s419 = phraseSignals("scam419", R.PHRASES.scam419, "weak");
-    if (s419 && fromFree) add("scam419", "weak", "Financial proposal from freemail", from.email);
 
     const vishHits = matchPhrases(R.PHRASES.vishing, contentText);
     const vishBrand = foldText(contentText).match(R.PHRASES.vishingBrands);
@@ -859,6 +1064,76 @@
     }
     for (const d of domains) verify.push({ what: d.domain, domain: d.domain, role: d.why, why: "Age not verified (" + d.why + "): check the creation date in RDAP/WHOIS and web presence.", link: "https://www.whois.com/whois/" + d.domain });
 
+    // --- Simulation markers ----------------------------------------------------------
+    // Traces of simulation platforms only suggest an exercise; a domain the team has
+    // attributed to a vendor (popup settings, with its source) supports it (guide, step 8).
+    const ids = [h["message-id"], h["in-reply-to"], h.references].filter(Boolean).join(" ");
+    for (const m of R.SIMULATION_MARKERS) {
+      const hit = ids.match(m.re);
+      if (hit) add("simulation", "weak", m.label, hit[0]);
+    }
+    const campaign = (ids.match(/<[a-z]+-([0-9a-f]{8,})-/i) || [])[1];
+    if (campaign && new RegExp("pixel[^\"'\\s]*" + campaign, "i").test(msg.html || "")) add("simulation", "weak", "Tracking pixel tied to the campaign id in the Message-ID", campaign);
+    const simList = msg.simulationDomains || [];
+    if (simList.length) {
+      const seen = [from.domain, replyTo.domain, returnPath.domain, (ids.match(/@([a-z0-9.-]+)>/i) || [])[1]]
+        .concat(links.map(function (l) { return l.host; }), links.map(function (l) { return l.destHost; }))
+        .concat((String(msg.html || "").match(/<img\b[^>]*\bsrc\s*=\s*["']?https?:\/\/[^\/"'\s>]+/gi) || []).map(function (x) { return x.replace(/^.*:\/\//, ""); }));
+      for (const entry of simList) {
+        const d = lower(entry.domain);
+        const host = seen.find(function (x) { return x && (lower(x) === d || lower(x).endsWith("." + d)); });
+        if (!host) continue;
+        add("simulation", "strong", "Domain on the team's simulation list" + (entry.vendor ? " (" + entry.vendor + ")" : "") + (entry.source ? " — source: " + entry.source : " — no source recorded: corroborate it"), host);
+      }
+    }
+    if (routes.simulation) {
+      notes.push("Simulation needs the domain attributed to the vendor from a current source, not the email's own claims. Without prior notice from the client, share it with team leadership (SEA p. 9).");
+    }
+
+    // Missing headers only matter when the body does not already point somewhere (guide:
+    // not to be applied mechanically when the content shows the scam).
+    if (msg.inline && !routes.firMissingHeaders && !Object.keys(routes).some(function (k) { return k.indexOf("fir") !== 0; })) {
+      add("firMissingHeaders", "weak", "Original forwarded in the body, without its headers", "Use only if the missing headers prevent a decision.");
+    }
+
+    // --- Non-malicious hypotheses ---------------------------------------------------
+    // Shown after the routes, never instead of one with strong evidence.
+    const anyStrong = Object.keys(routes).some(function (k) { return routes[k].signals.some(function (x) { return x.strength === "strong"; }); });
+    if (!isWrapper && !anyStrong) {
+      const suspicious = general.filter(function (x) { return x.strength === "strong" || R.SUSPICIOUS_WEAK.test(x.label); });
+      const weakRoutes = Object.keys(routes).filter(function (k) { return k.indexOf("fir") !== 0 && k !== "simulation"; });
+      if (suspicious.length || weakRoutes.length) {
+        add("dne", "weak", "Suspicious signs but no route that holds up: Do Not Engage unless one is confirmed", suspicious.map(function (x) { return x.label; }).concat(weakRoutes.map(function (k) { return routes[k].name.split(" → ").pop() + " (weak)"; })).slice(0, 4).join(" · "));
+      } else if (!routes.simulation && !Object.keys(routes).length) {
+        add("ntd", "weak", "Nothing suspicious found: No Threat Detected if it is ordinary correspondence, marketing or an event invitation", links.some(function (l) { return R.UNSUBSCRIBE.test(l.text + " " + l.href); }) ? "Has an unsubscribe link" : "");
+      }
+    }
+
+    const HINTS = ["dne", "ntd"];
+    // On a tie, the guide's more specific mechanism goes first (RECON last of Response).
+    const ORDER = ["simulation", "docuphish", "bec", "scam419", "vishing", "job", "techsupport", "o365", "phishing", "recon"];
+    const rank = function (k) { const i = ORDER.indexOf(k); return HINTS.indexOf(k) >= 0 ? 99 : i < 0 ? 50 : i; };
+    const list = Object.keys(routes).map(function (k) { return routes[k]; });
+    for (const r of list) {
+      r.strong = r.signals.filter(function (x) { return x.strength === "strong"; }).length;
+    }
+    // A domain the team attributed to a simulation vendor identifies the exercise
+    // (guide, step 8): it goes first; hypotheses go last.
+    const tier = function (r) { return r.key === "simulation" && r.strong ? 0 : HINTS.indexOf(r.key) >= 0 ? 2 : 1; };
+    list.sort(function (a, b) {
+      return tier(a) - tier(b) || b.strong - a.strong || b.signals.length - a.signals.length || rank(a.key) - rank(b.key);
+    });
+
+    // Response routes: the mailbox that receives the reply or the payment is a candidate
+    // once the route has strong evidence.
+    const top = list.find(function (r) { return HINTS.indexOf(r.key) < 0; });
+    if (top && top.strong && !msg.reportWrapper && ["bec", "scam419", "recon", "vishing", "job", "techsupport"].indexOf(top.key) >= 0) {
+      const leaf = top.name.split(" → ").pop();
+      if (replyDiverted) addIoc("Email address", replyTo.email, "Reply-To that receives the reply (" + leaf + ")");
+      for (const c of bodyContacts) addIoc("Email address", c.email, c.pay ? "Address the body asks to pay to (" + leaf + ")" : "Address the body asks to write to (" + leaf + ")");
+      if (fromFree) addIoc("Email address", from.email, "Freemail sender that carries out the " + leaf);
+    }
+
     // Sender exception (Carlos): do not mark a non-freemail sender, or one older than
     // a year with an active site, even if the email is malicious.
     let senderNote = from.email
@@ -871,18 +1146,11 @@
       iocs = [];
       senderNote = "";
     }
-
-    // Missing headers only matter when the body does not already point somewhere (guide:
-    // not to be applied mechanically when the content shows the scam).
-    if (msg.inline && !routes.firMissingHeaders && !Object.keys(routes).some(function (k) { return k.indexOf("fir") !== 0; })) {
-      add("firMissingHeaders", "weak", "Original forwarded in the body, without its headers", "Use only if the missing headers prevent a decision.");
+    // An exercise the team attributed to a vendor has nothing to mark (guide).
+    if (list[0] && list[0].key === "simulation" && list[0].strong) {
+      iocs = [];
+      senderNote = "Simulation: nothing is marked as malicious.";
     }
-
-    const list = Object.keys(routes).map(function (k) { return routes[k]; });
-    for (const r of list) {
-      r.strong = r.signals.filter(function (s) { return s.strength === "strong"; }).length;
-    }
-    list.sort(function (a, b) { return b.strong - a.strong || b.signals.length - a.signals.length; });
 
     return {
       layer: msg.layer,
@@ -912,7 +1180,8 @@
           { role: "From", value: from.email },
           { role: "Reply-To", value: replyTo.email },
           { role: "Return-Path", value: returnPath.email },
-        ].filter(function (a) { return a.value; }),
+        ].concat(bodyContacts.map(function (c) { return { role: c.pay ? "Payment address in the body" : "Contact address in the body", value: c.email }; }))
+          .filter(function (a) { return a.value; }),
         phones: phones,
         attachments: attachments.map(function (a) {
           const f = (msg.files || []).find(function (x) { return x.name === a.name; });
@@ -963,8 +1232,10 @@
    * A message sent to a reporting mailbox with the original forwarded in its body is
    * split into the report and the "Forwarded original".
    */
-  function analyzeAll(outer, nested, icsUrls) {
-    const o = Object.assign({ layer: "outer" }, outer);
+  function analyzeAll(outer, nested, icsUrls, opts) {
+    const settings = opts || {};
+    const shared = { simulationDomains: settings.simulationDomains || [], orgDomains: settings.orgDomains || [] };
+    const o = Object.assign({ layer: "outer" }, outer, shared);
     if (icsUrls && icsUrls.length) o.text = (o.text || "") + "\n" + icsUrls.join("\n");
     const h = o.headers || {};
     const to = addressesIn(h.to);
@@ -988,6 +1259,9 @@
       // Outlook puts the forwarded message's Message-ID in the forward's In-Reply-To.
       const ref = (String(h["in-reply-to"] || "").match(/<[^>]+>/) || [""])[0];
       layers.push(analyze({
+        simulationDomains: shared.simulationDomains,
+        // The organisation that reported it is the one being imitated, if any.
+        orgDomains: shared.orgDomains.concat(addressesIn(h.from).concat(to).map(function (a) { return a.split("@")[1]; })),
         layer: "forwarded",
         label: "Forwarded original (inline, without its headers)" + (inner.headers.subject ? " · " + inner.headers.subject : ""),
         short: "Forwarded original",
@@ -1005,7 +1279,7 @@
       layers.push(analyze(Object.assign({ label: "Opened message", short: "Opened message" }, o)));
     }
     (nested || []).forEach(function (m, i) {
-      const n = Object.assign({}, m, {
+      const n = Object.assign({}, m, shared, {
         layer: "nested",
         label: "Attached email " + (i + 1) + (m.filename ? " · " + m.filename : "") + (m.subject ? " · " + m.subject : ""),
         short: "Attached email" + ((nested || []).length > 1 ? " " + (i + 1) : ""),
@@ -1070,8 +1344,9 @@
   // Text in the analyst's response template, filled with what was observed.
   function summary(result) {
     const lines = [];
-    const top = result.routes.filter(function (r) { return r.key.indexOf("fir") !== 0; }).slice(0, 3);
-    lines.push("**Suggested classification:** pending review — routes with insights: " + (top.length ? top.map(function (r) { return r.name + " (" + r.signals.length + ")"; }).join("; ") : "none stand out"));
+    const top = result.routes.filter(function (r) { return r.key.indexOf("fir") !== 0 && r.key !== "dne" && r.key !== "ntd"; }).slice(0, 3);
+    const hint = result.routes.find(function (r) { return r.key === "dne" || r.key === "ntd"; });
+    lines.push("**Suggested classification:** pending review — routes with insights: " + (top.length ? top.map(function (r) { return r.name + " (" + r.signals.length + ")"; }).join("; ") : "none stand out") + (hint ? "; hypothesis: " + hint.name.replace(/ \(hypothesis\)$/, "") : ""));
     lines.push("**Summary:** ");
     lines.push("**Rationale:**");
     const strong = [];

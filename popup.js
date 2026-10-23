@@ -94,3 +94,31 @@ rdap.addEventListener("change", async function () {
     showRdapState();
   }
 });
+
+// Team settings: simulation domains (with their source) and organisation domains.
+// Kept in this profile's local storage; the background reads them for every message.
+const sim = document.getElementById("sim");
+const org = document.getElementById("org");
+const settingsState = document.getElementById("settings-state");
+let saveTimer = 0;
+async function loadSettings() {
+  try {
+    const st = await messenger.storage.local.get(["simulationDomainsText", "orgDomainsText"]);
+    sim.value = st.simulationDomainsText || "";
+    org.value = st.orgDomainsText || "";
+  } catch (_) {}
+}
+function saveSettings() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    try {
+      await messenger.storage.local.set({ simulationDomainsText: sim.value, orgDomainsText: org.value });
+      settingsState.textContent = "Saved. Reopen a message to apply.";
+    } catch (_) {
+      settingsState.textContent = "Could not save.";
+    }
+  }, 400);
+}
+sim.addEventListener("input", saveSettings);
+org.addEventListener("input", saveSettings);
+loadSettings();
