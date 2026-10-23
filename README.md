@@ -10,13 +10,13 @@ Not in this version: QR inside PDF attachments, phone OCR on images, Outlook `.m
 
 **Use the Release.** Do not download the source ZIP.
 
-1. Open https://github.com/ExploitBlock/PeelScout/releases/latest
+1. Open https://github.com/Verttungas/PhishScoutSentinel/releases/latest
 2. Download **PeelScout.xpi** (under Assets — not “Source code”)
 3. Thunderbird → Settings → Add-ons and Themes → gear → **Install Add-on From File…**
 4. Choose `PeelScout.xpi` → Add
 5. Restart Thunderbird and confirm PeelScout is still listed and enabled
 
-If Thunderbird says the add-on could not be verified, sign that same `.xpi` once at https://addons.thunderbird.net/developers/ (submit as **unlisted**), then Install From File with the signed file.
+Release builds are not signed yet. If Thunderbird says the add-on could not be verified, sign that same `.xpi` once at https://addons.thunderbird.net/developers/ (submit as **unlisted**), then Install From File with the signed file.
 
 ### Temporary test only
 
