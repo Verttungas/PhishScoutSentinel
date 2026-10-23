@@ -23,6 +23,12 @@
     while (t.length % 4) t += "=";
     try { return atob(t); } catch (_) { return ""; }
   }
+  function utf8(bin) {
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i) & 0xff;
+    try { return new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+    catch (_) { return bin; }
+  }
   function param(u, names) {
     for (const n of names) { const v = u.searchParams.get(n); if (v) return v; }
     return null;
@@ -58,18 +64,20 @@
     if (!enc) {
       return looksLikeUrl(url.replace(/\*/g, "")) ? { vendor: "Proofpoint URL Defense v3", url: url.replace(/\*/g, "") } : null;
     }
-    const bytes = b64urlDecode(enc);
-    if (!bytes) return looksLikeUrl(url) ? { vendor: "Proofpoint URL Defense v3", url: url } : null;
+    const bin = b64urlDecode(enc);
+    if (!bin) return looksLikeUrl(url) ? { vendor: "Proofpoint URL Defense v3", url: url } : null;
+    // The encoded bytes are UTF-8; each "*" stands for one character, not one byte.
+    const chars = Array.from(utf8(bin));
     const map = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let i = 0;
     url = url.replace(/\*\*([A-Za-z0-9\-_])|\*/g, function (tok, run) {
       if (run != null) {
         const n = map.indexOf(run) + 2;
-        const slice = bytes.slice(i, i + Math.max(n, 0));
+        const slice = chars.slice(i, i + Math.max(n, 0)).join("");
         i += Math.max(n, 0);
         return slice;
       }
-      return bytes.charAt(i++) || "";
+      return chars[i++] || "";
     });
     return looksLikeUrl(url) ? { vendor: "Proofpoint URL Defense v3", url: url } : null;
   }
@@ -232,5 +240,24 @@
     }
     return first;
   }
-  return { unwrapOnce, unwrapStep, host: function (href) { const u = parseUrl(href); return u ? u.hostname.toLowerCase() : ""; } };
+  // Peel every known layer (security wrappers and Google/Meet redirects) so a click
+  // goes straight to the destination. Token-only wrappers stop the loop.
+  function unwrapAll(href, maxLayers) {
+    const original = typeof href === "string" ? href.trim() : href;
+    if (!original || typeof original !== "string") return { changed: false, url: href, layers: [] };
+    const layers = [];
+    let cur = original;
+    let note = "";
+    for (let i = 0; i < (maxLayers || 6); i++) {
+      const step = unwrapStep(cur, true);
+      if (!step.changed) {
+        if (step.vendor) note = step.vendor + (step.note ? " — " + step.note : "");
+        break;
+      }
+      layers.push(step.vendor);
+      cur = step.url;
+    }
+    return { changed: layers.length > 0, url: cur, original, layers, vendor: layers.join(" → "), note };
+  }
+  return { unwrapOnce, unwrapStep, unwrapAll, host: function (href) { const u = parseUrl(href); return u ? u.hostname.toLowerCase() : ""; } };
 });

@@ -10,15 +10,21 @@
     pre { white-space: pre-wrap; word-break: break-all; background: #f4f1ea; padding: 8px; min-height: 3em; }
     button { margin-top: 6px; }
     .meta { color: #5c6774; font-size: 12px; margin: 6px 0; }
+    label.opt { font-weight: 400; display: flex; gap: 6px; align-items: center; }
+    hr { border: 0; border-top: 1px solid #ddd; margin: 12px 0 8px; }
   </style>
 </head>
 <body>
   <label for="src">Paste wrapped URL</label>
   <textarea id="src" placeholder="https://nam10.safelinks.protection.outlook.com/?url=..."></textarea>
-  <button id="go" type="button">Unwrap once</button>
-  <p class="meta" id="meta">Open a message: wrappers on links are removed automatically. Nested EMLs and QR URLs appear in the pane.</p>
+  <button id="go" type="button">Unwrap</button>
+  <p class="meta" id="meta">Open a message: wrappers on links are removed automatically. Insights, nested EMLs, image attachments and QR URLs appear in the sidebar.</p>
   <pre id="out">—</pre>
   <button id="copy" type="button">Copy result</button>
+  <hr />
+  <label class="opt"><input type="checkbox" id="rdap" /> Look up domain age (RDAP, then whois.com)</label>
+  <p class="meta" id="rdap-state"></p>
+  <p class="meta">For the Insights panel. Sends only the bare domain name to rdap.org / the registry and, when RDAP has no answer, to whois.com; nothing from the email leaves this machine. Off by default.</p>
   <script src="inflate-zlib.js"></script>
   <script src="unwrap.js"></script>
   <script src="popup.js"></script>

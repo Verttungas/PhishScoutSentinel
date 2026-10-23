@@ -1,11 +1,11 @@
 /**
- * Phone numbers from nested-EML text and inner images (OCRAD if loaded).
+ * Phone numbers from nested-EML text.
  */
 (function (root) {
   "use strict";
 
   function extractPhones(text) {
-    var s = String(text || "").replace(/\u00a0/g, " ");
+    var s = String(text || "").replace(/ /g, " ");
     var out = [];
     var seen = Object.create(null);
     var re =
@@ -16,7 +16,11 @@
       var digits = raw.replace(/\D/g, "");
       if (digits.length < 10 || digits.length > 15) continue;
       if (/^(.)\1+$/.test(digits)) continue;
-      if (/^20(1[6-9]|2[0-9])/.test(digits) && digits.length === 8) continue;
+      // Dates such as 2024-10-23 10:30 or 23/10/2024 1030.
+      if (/^(19|20)\d{2}[\s./-]\d{1,2}[\s./-]\d{1,2}\b/.test(raw) || /^\d{1,2}[\s./-]\d{1,2}[\s./-](19|20)\d{2}\b/.test(raw)) continue;
+      // Bare digit runs: keep only 10-digit national numbers (no leading 0/1). This drops
+      // Unix timestamps (1698000000), millisecond timestamps and long order/reference IDs.
+      if (/^\d+$/.test(raw) && (digits.length !== 10 || /^[01]/.test(digits))) continue;
       if (seen[digits]) continue;
       seen[digits] = true;
       out.push(raw.replace(/\s+/g, " "));
@@ -24,50 +28,5 @@
     return out;
   }
 
-  function ocrDataUrl(dataUrl) {
-    return new Promise(function (resolve) {
-      var fn = root.OCRAD;
-      if (typeof fn !== "function" || !dataUrl) {
-        resolve("");
-        return;
-      }
-      var img = new Image();
-      img.onload = function () {
-        try {
-          var w = img.naturalWidth || img.width;
-          var h = img.naturalHeight || img.height;
-          if (w < 24 || h < 24 || w * h > 16000000) {
-            resolve("");
-            return;
-          }
-          var scale = 1;
-          if (Math.max(w, h) < 900) scale = Math.min(2.2, 900 / Math.max(w, h));
-          var c = document.createElement("canvas");
-          c.width = Math.max(1, Math.round(w * scale));
-          c.height = Math.max(1, Math.round(h * scale));
-          var ctx = c.getContext("2d");
-          ctx.fillStyle = "#fff";
-          ctx.fillRect(0, 0, c.width, c.height);
-          ctx.drawImage(img, 0, 0, c.width, c.height);
-          var mixed = "";
-          try {
-            mixed = fn(c) || "";
-          } catch (_) {}
-          var nums = "";
-          try {
-            nums = fn(c, { numeric: true }) || "";
-          } catch (_) {}
-          resolve(String(mixed) + "\n" + String(nums));
-        } catch (_) {
-          resolve("");
-        }
-      };
-      img.onerror = function () {
-        resolve("");
-      };
-      img.src = dataUrl;
-    });
-  }
-
-  root.PeelPhones = { extractPhones: extractPhones, ocrDataUrl: ocrDataUrl };
+  root.PeelPhones = { extractPhones: extractPhones };
 })(typeof globalThis !== "undefined" ? globalThis : this);

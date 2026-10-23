@@ -7,7 +7,9 @@
     return String(text || "").replace(/\r\n/g, "\n").replace(/\n[ \t]/g, "");
   }
   function unescapeIcs(value) {
-    return String(value || "").replace(/\\n/gi, "\n").replace(/\\,/g, ",").replace(/\\;/g, ";").replace(/\\\\/g, "\\");
+    return String(value || "").replace(/\\([nN,;\\])/g, function (_, c) {
+      return c === "n" || c === "N" ? "\n" : c;
+    });
   }
   function pullUrls(text) {
     const found = [];

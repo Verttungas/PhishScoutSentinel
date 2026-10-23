@@ -1,0 +1,8 @@
+{
+  "name": "peelscout",
+  "private": true,
+  "description": "Development scripts for the PeelScout Thunderbird add-on (not shipped in the .xpi).",
+  "scripts": {
+    "test": "node --test"
+  }
+}
