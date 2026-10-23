@@ -256,7 +256,9 @@
       } catch (_) {
         return;
       }
-      msg.images.push({ cid: ent.cid || "", name: ent.name || "", mime: mime, dataUrl: dataUrl });
+      var disp = (ent.headers && ent.headers["content-disposition"]) || "";
+      // Shown in the body (inline, referenced by cid) or an attached image file.
+      msg.images.push({ cid: ent.cid || "", name: ent.name || "", mime: mime, dataUrl: dataUrl, size: ent.bytes.length, inline: !!ent.cid && !/^attachment/i.test(disp) });
     }
 
     function walk(ent) {

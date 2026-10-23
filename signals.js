@@ -6,11 +6,11 @@
  */
 (function (root, factory) {
   if (typeof module === "object" && module.exports) {
-    module.exports = factory(require("./rules.js"), require("./unwrap.js"), require("./phones.js") && globalThis.PeelPhones, require("./sublime-rules.js"), require("./forwards.js"), require("./pdfscan.js"));
+    module.exports = factory(require("./rules.js"), require("./unwrap.js"), require("./phones.js") && globalThis.PeelPhones, require("./sublime-rules.js"), require("./forwards.js"), require("./pdfscan.js"), require("./jsqr.min.js"));
   } else {
-    root.PeelSignals = factory(root.PeelRules, root.WrapperUnwrap, root.PeelPhones, root.SublimeRules, root.PeelForwards, root.PeelPdf);
+    root.PeelSignals = factory(root.PeelRules, root.WrapperUnwrap, root.PeelPhones, root.SublimeRules, root.PeelForwards, root.PeelPdf, root.jsQR);
   }
-})(typeof globalThis !== "undefined" ? globalThis : this, function (R, Unwrap, Phones, Sublime, Forwards, Pdf) {
+})(typeof globalThis !== "undefined" ? globalThis : this, function (R, Unwrap, Phones, Sublime, Forwards, Pdf, QR) {
   "use strict";
 
   function lower(s) {
@@ -571,18 +571,29 @@
     const imageText = images.map(function (f) { return f.scan.text || ""; }).join("\n");
     const text = (isWrapper ? "" : subject + "\n") + ownText + (imageText && !isWrapper ? "\n" + imageText : "");
     const attachments = msg.attachments || [];
-    const files = allFiles.filter(function (f) { return f.kind !== "image"; });
+    const files = allFiles.filter(function (f) { return f.kind !== "image" && f.kind !== "qr"; });
+    // QR codes found in the message's images: in the body they are a link of the email
+    // (Link family); in an attached image they are inside a file (Payload → Docuphish).
+    const qrFiles = allFiles.filter(function (f) { return f.kind === "qr"; });
     const fileText = files.map(function (f) { return f.scan.text || ""; }).join("\n") + (imageText ? "\n" + imageText : "");
     // What the lure says, wherever it says it (body or the PDF it comes in).
     const contentText = text + (fileText ? "\n" + fileText : "");
     const links = extractLinks(msg.html, msg.text);
+    for (const f of qrFiles.filter(function (x) { return x.where === "body"; })) {
+      for (const l of extractLinks("", (f.scan.uris || []).join("\n"))) {
+        l.text = "";
+        l.qr = f.name;
+        links.push(l);
+      }
+    }
     const actionLinks = links.filter(function (l) {
-      // Links to the sender's own site are not action links, unless they redirect elsewhere.
+      // Links to the sender's own site are not action links, unless they redirect
+      // elsewhere or come from a QR code (a QR in the body is the action itself).
       return l.host && !R.UNSUBSCRIBE.test(l.text + " " + l.href) && !hostIn(l.host, R.DEFENSIVE_HOSTS) &&
         !(hostIn(l.host, R.SOCIAL_HOSTS) && !l.hops.length) &&
         !/^https?:\/\/[^\/]*googleusercontent\.com\/mail-sig\//i.test(l.final) &&
         !(quotedPart && l.text && quotedPart.indexOf(l.text) >= 0 && ownPart.indexOf(l.text) < 0) &&
-        !(from.domain && regDomain(from.domain) === l.reg && l.destReg === l.reg && !isFreemail(from.domain));
+        !(from.domain && regDomain(from.domain) === l.reg && l.destReg === l.reg && !isFreemail(from.domain) && !l.qr);
     });
     const phoneText = ownPart + (fileText ? "\n" + fileText : "");
     const phones = Phones && Phones.extractPhones ? Phones.extractPhones(phoneText) : [];
@@ -843,6 +854,7 @@
     }
     const redirected = [];
     for (const l of actionLinks) {
+      if (l.qr) flagLink(l, "Link from a QR code in the body (“" + l.qr + "”): a QR hides the link from scanners", "strong");
       if (l.text && !/[\p{L}\p{N}]/u.test(l.text)) flagLink(l, "Link hidden in a line of punctuation", "strong");
       checkHosts(l, redirected);
     }
@@ -854,11 +866,32 @@
       verify.push({ what: l.dest || l.final, why: "The clickable part is an image: read the image and check this URL in the VM." });
     }
 
-    // --- Attachments: what the PDF scan found ----------------------------------------
+    // --- Attachments: what the PDF scan found, and QR codes in attached images -------
     const fileLinks = [];
+    const pwHint = R.PHRASES.passwordHint.test(foldText(ownText));
+    function fileLinksOf(f, urls, via) {
+      const out = [];
+      for (const l of extractLinks("", urls.filter(function (u) { return /^https?:/i.test(u); }).join("\n"))) {
+        l.text = "";
+        l.file = f.name || "(unnamed file)";
+        l.via = via;
+        if (l.reg === regDomain(from.domain) || officialFor(l.host) || hostIn(l.host, R.DEFENSIVE_HOSTS)) continue;
+        if (fileLinks.concat(out).some(function (x) { return x.final === l.final; })) continue;
+        out.push(l);
+        fileLinks.push(l);
+        checkHosts(l, redirected);
+      }
+      return out;
+    }
+    function lureFile(f, kind, l, strong, how, quote) {
+      add("docuphish", strong ? "strong" : "weak", kind + " “" + f.name + "” " + how + " " + l.destReg + (quote ? " (“" + quote + "”)" : ""), l.final);
+      if (!strong) return;
+      addIoc("Attachment", f.name + (f.sha256 ? " · SHA-256 " + f.sha256 : ""), kind + " carrying the lure");
+      addIoc("URL", l.final, l.via === "qr" ? "URL in the QR code of the " + kind.toLowerCase() : l.via === "text" ? "URL the " + kind.toLowerCase() + " asks to visit" : "Action link inside the PDF");
+      verify.push({ what: l.dest, why: (l.via === "qr" ? "From the QR code in “" : l.via === "text" ? "Written in “" : "Link inside “") + f.name + "” (not visited): check in the VM whether it opens a sign-in or a download." });
+    }
     for (const f of files) {
       const sc = f.scan;
-      const pwHint = R.PHRASES.passwordHint.test(foldText(ownText));
       if (sc.encrypted && !sc.decrypted) {
         if (pwHint) add("docuphish", "strong", "Encrypted PDF whose password is given in the email (keeps scanners out)", f.name + " (" + sc.algorithm + ", not opened)");
         else add("firEncrypted", "weak", "Encrypted PDF without its password", f.name);
@@ -867,24 +900,27 @@
       }
       for (const feat of sc.features) add(null, /JavaScript|Launch|Embedded|Submit/.test(feat) ? "strong" : "weak", "PDF has " + feat, f.name);
       if (/headlesschrome/i.test(sc.creator) || /^about:blank$/i.test(sc.title)) add(null, "weak", "PDF printed from a web page by a headless browser (how lure PDFs are often made)", f.name + " · " + (sc.title || sc.creator).slice(0, 60));
-      if (!sc.text && !sc.uris.length && sc.images) notes.push("“" + f.name + "” has no text layer (scanned pages or images): read it visually.");
-      const web = sc.uris.filter(function (u) { return /^https?:/i.test(u); });
-      const flinks = extractLinks("", web.join("\n"));
-      for (const l of flinks) {
-        l.text = "";
-        l.file = f.name || "(unnamed PDF)";
-        if (l.reg === regDomain(from.domain) || officialFor(l.host) || hostIn(l.host, R.DEFENSIVE_HOSTS)) continue;
-        fileLinks.push(l);
-        checkHosts(l, redirected);
+      if (!sc.text && !sc.uris.length && !(sc.qr || []).length && sc.images) notes.push("“" + f.name + "” has no text layer (scanned pages or images): read it visually.");
+      const cta = (sc.text || "").match(R.PHRASES.fileCta);
+      // A QR code inside a file is the Docuphish vehicle the guide describes (SEA p. 15).
+      const viaQr = fileLinksOf(f, sc.qr || [], "qr");
+      if (viaQr.length) lureFile(f, "PDF", viaQr[0], true, "has a QR code that sends the reader to");
+      for (const q of (sc.qr || []).filter(function (x) { return !/^https?:/i.test(x); }).slice(0, 2)) add(null, "weak", "QR code in “" + f.name + "” holds text, not a link", q.slice(0, 120));
+      const clickable = fileLinksOf(f, sc.uris, "link");
+      if (clickable.length && clickable.length <= 5) {
+        lureFile(f, "PDF", clickable[0], !!cta || (clickable[0].flags || []).length > 0, "sends the reader to", cta && cta[0]);
+        for (const l of clickable.slice(1, 3)) if (cta) addIoc("URL", l.final, "Action link inside the PDF");
       }
-      const ours = fileLinks.filter(function (l) { return l.file === f.name; });
-      if (ours.length && ours.length <= 5) {
-        const cta = (sc.text || "").match(R.PHRASES.fileCta);
-        add("docuphish", cta || (ours[0].flags || []).length ? "strong" : "weak", "PDF “" + f.name + "” sends the reader to " + ours[0].destReg + (cta ? " (“" + cta[0] + "”)" : ""), ours[0].final);
-        addIoc("Attachment", f.name + (f.sha256 ? " · SHA-256 " + f.sha256 : ""), "PDF carrying the lure");
-        for (const l of ours.slice(0, 3)) addIoc("URL", l.final, "Action link inside the PDF");
-        verify.push({ what: ours[0].dest, why: "Link inside the PDF (not visited): check in the VM whether it opens a sign-in or a download." });
+      // Addresses written in the PDF (not clickable) count when the text asks to visit them.
+      const written = fileLinksOf(f, sc.textUris || [], "text");
+      if (written.length && written.length <= 5 && !viaQr.length && !clickable.length) {
+        lureFile(f, "PDF", written[0], !!cta, "asks to visit (written, not a link)", cta && cta[0]);
       }
+    }
+    for (const f of qrFiles.filter(function (x) { return x.where !== "body"; })) {
+      const viaQr = fileLinksOf(f, f.scan.uris || [], "qr");
+      if (viaQr.length) lureFile(f, "Image", viaQr[0], true, "has a QR code that sends the reader to");
+      else if (f.scan.text) add(null, "weak", "QR code in the attached image “" + f.name + "”", f.scan.text.slice(0, 120));
     }
 
     for (const f of images) {
@@ -922,7 +958,8 @@
       const word = brandWord(lureText);
       const claimed = (word && !word.workplace ? word : null) || (Object.keys(R.BRANDS).filter(function (b) { return R.WORKPLACE_BRANDS.indexOf(b) < 0; })
         .map(function (b) { return lower(lureText).replace(/\s+/g, "").indexOf(b) >= 0 ? { name: b } : null; }).filter(Boolean)[0]) || null;
-      const msNamed = R.O365_LURE.test(lureText);
+      // Asking for "work credentials" is a sign-in of the organisation, whatever brand is shown.
+      const msNamed = R.O365_LURE.test(lureText) || /\b(work|corporate|company|office|network) (credentials|password|account|e-?mail account)\b/i.test(lureText);
       const linkRoute = claimed && !msNamed ? "phishing" : "o365";
       const route = viaFile && !suspicious.length ? "docuphish" : linkRoute;
       for (const hit of credHits) add(route, "weak", "Keyword: " + hit.label, "“" + hit.quote + "”");
@@ -1189,7 +1226,7 @@
       ocrTexts: images.map(function (f) { return { name: f.name, text: f.scan.text || "", confidence: f.scan.confidence || 0 }; }),
       inventory: {
         links: links.concat(fileLinks).map(function (l) {
-          return { text: l.text, href: l.href, url: l.final, dest: l.dest !== l.final ? l.dest : "", host: l.host, layers: l.layers || [], flags: (l.flags || []).concat(l.file ? ["In PDF " + l.file] : []), action: actionLinks.indexOf(l) !== -1 || !!l.file };
+          return { text: l.text, href: l.href, url: l.final, dest: l.dest !== l.final ? l.dest : "", host: l.host, layers: l.layers || [], flags: (l.flags || []).concat(l.file ? [(l.via === "qr" ? "QR in " : l.via === "text" ? "Written in " : "In ") + l.file] : l.qr ? ["QR in the body (" + l.qr + ")"] : []), action: actionLinks.indexOf(l) !== -1 || !!l.file };
         }),
         addresses: [
           { role: "From", value: from.email },
@@ -1218,11 +1255,17 @@
   }
 
   // An image read with OCR, as a "file" the engine reads like a PDF's text.
+  // A QR code decoded from an image of the message. where: "body" (shown inline) or
+  // "attachment" (an attached image file).
+  function qrFile(name, payload, where, sha256) {
+    const p = String(payload || "");
+    const uris = /^(https?:\/\/|www\.)/i.test(p) ? [/^www\./i.test(p) ? "https://" + p : p] : Pdf ? Pdf.urlsInText(p) : [];
+    return { name: name || "image", kind: "qr", where: where === "body" ? "body" : "attachment", sha256: sha256 || "", scan: { ok: true, kind: "qr", uris: uris.slice(0, 3), text: p, features: [], images: 1 } };
+  }
+
   function ocrFile(name, text, confidence, sha256) {
     const t = String(text || "");
-    const uris = (t.match(/\bhttps?:\/\/[^\s<>"')\]]+|\b(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|net|org|info|biz|io|co|ca|us|uk|de|fr|es|mx|ru|cn|top|xyz|online|site|app|dev)(?:\/[^\s<>"')\]]*)?/gi) || [])
-      .map(function (u) { return /^https?:/i.test(u) ? u : "https://" + u; })
-      .filter(function (u, i, a) { return a.indexOf(u) === i && !/@/.test(u); });
+    const uris = Pdf ? Pdf.urlsInText(t) : [];
     return { name: name || "image", kind: "image", sha256: sha256 || "", scan: { ok: true, kind: "image", pages: 1, encrypted: false, uris: uris.slice(0, 10), text: t, confidence: Math.round(confidence || 0), features: [], producer: "", creator: "", title: "", images: 1 } };
   }
 
@@ -1244,8 +1287,8 @@
   function scanFiles(msg, recipients) {
     const body = (msg.text || htmlToText(msg.html)) + "\n" + String((msg.headers || {}).subject || msg.subject || "");
     return (msg.files || []).map(function (f) {
-      const scan = f.scan || (Pdf && f.bytes ? Pdf.scan(toBytes(f.bytes), { passwords: Pdf.passwordHints(body, recipients) }) : null);
-      return { name: f.name, kind: f.kind || "pdf", size: f.size, contentType: f.contentType, sha256: f.sha256 || "", scan };
+      const scan = f.scan || (Pdf && f.bytes ? Pdf.scan(toBytes(f.bytes), { passwords: Pdf.passwordHints(body, recipients), images: true, qr: QR || null }) : null);
+      return { name: f.name, kind: f.kind || "pdf", where: f.where, size: f.size, contentType: f.contentType, sha256: f.sha256 || "", scan };
     });
   }
 
@@ -1397,5 +1440,5 @@
     return lines.join("\n");
   }
 
-  return { analyze, analyzeAll, ocrFile, summary, applyAges, regDomain, isFreemail, parseAddress, extractLinks, hiddenText, lookalikeBrand, detectLanguage, receivedIps, stripBanners, foldText, redirectHop, callbackPhones };
+  return { analyze, analyzeAll, ocrFile, qrFile, scanFiles, addressesIn, summary, applyAges, regDomain, isFreemail, parseAddress, extractLinks, hiddenText, lookalikeBrand, detectLanguage, receivedIps, stripBanners, foldText, redirectHop, callbackPhones };
 });

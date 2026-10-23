@@ -4,7 +4,7 @@ Thunderbird add-on that removes email-security URL wrappers (every known layer) 
 
 A normal click opens the destination URL in your browser. The stored `.eml` is not changed. PeelScout does not need internet to run (the optional domain-age lookup — RDAP, then whois.com — is the only network use, and it is off by default).
 
-Not in this version: QR or OCR inside PDF pages (a scanned PDF is flagged, not read), Outlook `.msg` attachments. Translator is not included.
+Not in this version: OCR of PDF pages (a scanned PDF is flagged, not read), Outlook `.msg` attachments. Translator is not included.
 
 ## Install in Thunderbird
 
@@ -23,6 +23,15 @@ Release builds are not signed yet. If Thunderbird says the add-on could not be v
 Debug Add-ons → **Load Temporary Add-on…** → `manifest.json` from a source checkout. Unloads when Thunderbird restarts.
 
 Requires Thunderbird 128+.
+
+## 1.10.0
+
+- New: **QR codes feed the insights**. The background decodes the QR codes in the message's images (inline and attached, and in attached emails) and the links they hold go through the same checks as the email's links: unwrapping, redirects, lookalikes, routes and candidates. A QR in the body is an action link of the email (Link → O365 / Phishing); a QR in an attached image or inside a PDF points to Payload → Docuphish with the file (SHA-256) and the URL as candidates
+- New: **QR codes inside PDFs**: images embedded in PDF attachments (Flate gray/RGB/CMYK/indexed/1-bit, PNG predictors, and JPEG) are decoded
+- New: **URLs written in a PDF** (not clickable) are extracted; they count as the PDF's lure when its text asks to visit them
+- New: credential lures that ask for "work credentials" or to sign in after scanning a QR code point to Link → O365
+- Fix: PDF streams whose `/Length` is an indirect object are read correctly
+- `scripts/ocr-samples.js` is now `scripts/image-samples.js` (QR + OCR) and `eval-samples.js` takes `--image-cache` (and `--no-ocr`)
 
 ## 1.9.0
 
@@ -153,11 +162,11 @@ node scripts/eval-samples.js "/path/to/EML Samples" --json results.json
 
 Keep the samples outside the repository: they are real customer mail.
 
-To include OCR in the measurement, read the samples' images with the add-on's own OCR (it is the browser build, so the script serves a page on 127.0.0.1 for any browser to open) and pass the result:
+To include QR codes and OCR in the measurement, read the samples' images the way the add-on does (jsQR and its own OCR run in a browser, so the script serves a page on 127.0.0.1 for any browser to open) and pass the result; `--no-ocr` measures without the on-demand OCR:
 
 ```bash
-node scripts/ocr-samples.js "/path/to/EML Samples" ocr-cache.json
-node scripts/eval-samples.js "/path/to/EML Samples" --ocr-cache ocr-cache.json
+node scripts/image-samples.js "/path/to/EML Samples" image-cache.json
+node scripts/eval-samples.js "/path/to/EML Samples" --image-cache image-cache.json
 ```
 
 The `.xpi` must include `ocr/` and `ocr.js`. The files in `ocr/` are tesseract.js 5.1.1, tesseract.js-core 5.1.1 (`tesseract-core-simd-lstm.wasm.js`) and @tesseract.js-data 1.0.0 (`4.0.0_best_int` models), all Apache-2.0 (licenses in `ocr/`); `test/ocr.test.js` pins their SHA-256.

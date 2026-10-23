@@ -20,14 +20,16 @@ const N = require(path.join(REPO, "nested.js"));
 const ICS = require(path.join(REPO, "ics.js"));
 
 const args = process.argv.slice(2);
-const root = args.find((a, i) => !a.startsWith("--") && !["--json", "--settings", "--ocr-cache"].includes(args[i - 1]));
+const root = args.find((a, i) => !a.startsWith("--") && !["--json", "--settings", "--image-cache"].includes(args[i - 1]));
 const jsonOut = args.includes("--json") ? args[args.indexOf("--json") + 1] : null;
 const verbose = args.includes("--verbose");
 // Optional JSON with the popup's settings: {"simulationDomains": [{"domain", "vendor", "source"}], "orgDomains": []}.
 const settings = args.includes("--settings") ? JSON.parse(fs.readFileSync(args[args.indexOf("--settings") + 1], "utf8")) : {};
-// Optional OCR results, as the sidebar's "Read images (OCR)" would add them:
-// {"<sha256 of the image bytes>": {"text": "...", "confidence": 90}} (see scripts/ocr-images.html).
-const ocrCache = args.includes("--ocr-cache") ? JSON.parse(fs.readFileSync(args[args.indexOf("--ocr-cache") + 1], "utf8")) : null;
+// Optional image results from scripts/image-samples.js: {"<sha256 of the image>":
+// {"qr": "payload" | null, "text": "...", "confidence": 90}}. QR codes are decoded by the
+// add-on on its own; the OCR text is what "Read images (OCR)" adds (--no-ocr leaves it out).
+const imageCache = args.includes("--image-cache") ? JSON.parse(fs.readFileSync(args[args.indexOf("--image-cache") + 1], "utf8")) : null;
+const withOcr = !args.includes("--no-ocr");
 if (!root) {
   console.error("Usage: node scripts/eval-samples.js <samples folder> [--json out.json] [--verbose]");
   process.exit(1);
@@ -70,20 +72,43 @@ function withHashes(files) {
   return (files || []).map((f) => Object.assign({}, f, { sha256: crypto.createHash("sha256").update(Buffer.from(f.bytes, "latin1")).digest("hex") }));
 }
 
-// Images the sidebar would read with OCR (≥ 15 KB, six largest), with their cached text.
-function ocrFiles(msg) {
-  if (!ocrCache) return [];
+const sha256 = (bytes) => crypto.createHash("sha256").update(bytes).digest("hex");
+
+// Files the add-on adds for a message's images: QR codes (every image, as the background
+// decodes them) and OCR text (≥ 15 KB, six largest), taken from the image cache.
+function imageFiles(msg) {
+  if (!imageCache) return [];
   const imgs = (msg.images || [])
-    .map((img) => ({ name: img.name || "image", bytes: Buffer.from(String(img.dataUrl).split(",")[1] || "", "base64") }))
-    .filter((img) => img.bytes.length >= 15000 && !/svg|icon/.test(img.name))
-    .sort((a, b) => b.bytes.length - a.bytes.length)
-    .slice(0, 6);
+    .map((img) => ({ name: img.name || "image", inline: img.inline, mime: img.mime, bytes: Buffer.from(String(img.dataUrl).split(",")[1] || "", "base64") }))
+    .filter((img) => !/svg|icon/.test(img.mime || ""));
   const out = [];
-  for (const img of imgs) {
-    const sha = crypto.createHash("sha256").update(img.bytes).digest("hex");
-    if (ocrCache[sha]) out.push(S.ocrFile(img.name, ocrCache[sha].text, ocrCache[sha].confidence, sha));
+  for (const img of imgs.slice(0, 12)) {
+    const hit = imageCache[sha256(img.bytes)];
+    if (hit && hit.qr) out.push(S.qrFile(img.name, hit.qr, img.inline ? "body" : "attachment", sha256(img.bytes)));
+  }
+  if (withOcr) {
+    for (const img of imgs.filter((x) => x.bytes.length >= 15000).sort((a, b) => b.bytes.length - a.bytes.length).slice(0, 6)) {
+      const hit = imageCache[sha256(img.bytes)];
+      if (hit && hit.text !== undefined) out.push(S.ocrFile(img.name, hit.text, hit.confidence, sha256(img.bytes)));
+    }
   }
   return out;
+}
+
+// PDFs scanned up front (as background.js does), with the QR codes of their JPEG images
+// taken from the image cache; then the image files.
+function scannedFiles(msg) {
+  const files = S.scanFiles(Object.assign({}, msg, { files: withHashes(msg.files) }), S.addressesIn((msg.headers || {}).to));
+  for (const f of files) {
+    const sc = f.scan;
+    if (!sc || !sc.jpegs) continue;
+    for (const j of sc.jpegs) {
+      const hit = imageCache && imageCache[sha256(Buffer.from(j))];
+      if (hit && hit.qr && sc.qr.indexOf(hit.qr) < 0) sc.qr.push(hit.qr);
+    }
+    delete sc.jpegs;
+  }
+  return files.concat(imageFiles(msg));
 }
 
 function icsUrls(raw) {
@@ -101,13 +126,13 @@ function analyse(raw) {
     text: top.text,
     html: top.html,
     attachments: top.attachments,
-    files: withHashes(top.files).concat(ocrFiles(top)),
+    files: scannedFiles(top),
     hasNestedEml: !!(top.nested && top.nested.length),
   };
   const nested = [];
   (function push(list) {
     for (const m of list || []) {
-      if (m.html || m.text || (m.images && m.images.length)) nested.push(Object.assign({}, m, { files: withHashes(m.files).concat(ocrFiles(m)), hasNestedEml: !!(m.nested && m.nested.length) }));
+      if (m.html || m.text || (m.images && m.images.length)) nested.push(Object.assign({}, m, { files: scannedFiles(m), hasNestedEml: !!(m.nested && m.nested.length) }));
       push(m.nested);
     }
   })(top.nested);
