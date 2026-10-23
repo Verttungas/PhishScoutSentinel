@@ -1,21 +1,13 @@
 {
   "manifest_version": 2,
-  "name": "PeelScout",
-  "description": "Removes the first email-security URL wrapper, shows nested EML content and QR URLs, extracts phone numbers from nested-EML images, and surfaces calendar-invite URLs.",
-  "version": "1.7.4",
-  "author": "ExploitBlock",
-  "browser_specific_settings": {
-    "gecko": {
-      "id": "peelscout@exploitblock.local",
-      "strict_min_version": "128.0"
-    }
-  },
-  "permissions": ["messagesRead", "messagesModify", "menus"],
-  "background": {
-    "scripts": ["ics.js", "nested.js", "background.js"]
-  },
-  "message_display_action": {
-    "default_title": "PeelScout",
-    "default_popup": "popup.html"
-  }
+  "name": "PhishScoutSentinel",
+  "version": "0.1.0",
+  "description": "Triaje SOC local de EML: originales separados, headers, adjuntos e indicadores sin navegar a su contenido.",
+  "author": "Verttungas; basado en PeelScout de ExploitBlock",
+  "browser_specific_settings": {"gecko": {"id": "phishscoutsentinel@verttungas.local", "strict_min_version": "128.0"}},
+  "permissions": ["messagesRead"],
+  "background": {"scripts": ["background.js"]},
+  "browser_action": {"default_title": "Abrir PhishScoutSentinel"},
+  "message_display_action": {"default_title": "Analizar con PhishScoutSentinel"},
+  "content_security_policy": "default-src 'none'; script-src 'self'; style-src 'self'; img-src data: blob:; connect-src 'none'; worker-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
 }

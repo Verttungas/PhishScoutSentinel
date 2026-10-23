@@ -41,7 +41,10 @@
     if (/\/v3\//i.test(u.pathname)) return null;
     const raw = u.searchParams.get("u");
     if (!raw) return null;
-    let decoded = safeDecode(raw.replace(/-/g, "%").replace(/_/g, "/"));
+    if (/^\/v1\//i.test(u.pathname)) return looksLikeUrl(raw) ? {vendor: "Proofpoint URL Defense v1", url: raw} : null;
+    let decoded;
+    try { decoded = decodeURIComponent(raw.replace(/-/g, "%").replace(/_/g, "/")); }
+    catch (_) { return {vendor: "Proofpoint URL Defense", url: null, note: "Malformed wrapper; extraction not performed."}; }
     if (!looksLikeUrl(decoded)) {
       const plain = safeDecode(raw);
       if (looksLikeUrl(plain)) decoded = plain;
@@ -49,14 +52,16 @@
     return looksLikeUrl(decoded) ? { vendor: "Proofpoint URL Defense", url: decoded } : null;
   }
   function proofpointV3(href) {
-    if (!/urldefense(\.proofpoint)?\.com|urldefense\.us/i.test(href)) return null;
+    const u = parseUrl(href);
+    if (!u || !/(^|\.)urldefense(\.proofpoint)?\.com$/i.test(u.hostname) && !/(^|\.)urldefense\.us$/i.test(u.hostname)) return null;
     const m = href.match(/\/v3\/__(.+?)__;([^!]*)/i);
     if (!m) return null;
     let url = m[1];
-    try { url = decodeURIComponent(url); } catch (_) {}
+    // Preserve escapes belonging to the destination rather than decoding twice.
+    if (!looksLikeUrl(url)) { try { url = decodeURIComponent(url); } catch (_) {} }
     const enc = m[2] || "";
     if (!enc) {
-      return looksLikeUrl(url.replace(/\*/g, "")) ? { vendor: "Proofpoint URL Defense v3", url: url.replace(/\*/g, "") } : null;
+      return !url.includes("*") && looksLikeUrl(url) ? { vendor: "Proofpoint URL Defense v3", url: url } : {vendor:"Proofpoint URL Defense v3",url:null,note:"Missing substitution data; extraction not performed."};
     }
     const bytes = b64urlDecode(enc);
     if (!bytes) return looksLikeUrl(url) ? { vendor: "Proofpoint URL Defense v3", url: url } : null;
@@ -149,7 +154,7 @@
   function trendMicro(href) {
     const u = parseUrl(href);
     if (!u) return null;
-    if (!/(urlprotect|ctp)\.trendmicro\.com$/i.test(u.hostname) && !/clicktime\.trendmicro\.com$/i.test(u.hostname)) return null;
+    if (!/^(urlprotect|ctp|clicktime)\.trendmicro\.com$/i.test(u.hostname)) return null;
     const inner = param(u, ["destination", "url", "r", "u"]);
     if (inner && looksLikeUrl(inner)) return { vendor: "Trend Micro URL Protect", url: inner };
     const maybe = inner ? safeDecode(inner) : null;
@@ -197,6 +202,7 @@
   const DETECTORS = [microsoftSafeLinks, proofpointV3, proofpointV2orV1, barracuda, symantec, egress, sophos, cisco, mimecast, trendMicro, libraesva, intermediaVipre, genericQuery];
   function unwrapOnce(href) {
     if (!href || typeof href !== "string") return { changed: false, url: href };
+    if (href.length > 16384) return {changed:false,url:href,note:"URL exceeds extraction limit (16384 characters)."};
     const trimmed = href.trim();
     for (const det of DETECTORS) {
       let hit = null;
@@ -216,7 +222,7 @@
   function googleUrlRedirect(href) {
     const u = parseUrl(href);
     if (!u) return null;
-    if (!/(^|\.)google\.[a-z.]+$/i.test(u.hostname) && !/(^|\.)google\.com$/i.test(u.hostname)) return null;
+    if (!/^(www\.)?google\.com$/i.test(u.hostname)) return null;
     if (!/^\/url$/i.test(u.pathname)) return null;
     const inner = param(u, ["q", "url", "dest"]);
     return inner && looksLikeUrl(inner) ? { vendor: "Google /url redirect", url: inner } : null;

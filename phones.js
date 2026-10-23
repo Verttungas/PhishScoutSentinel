@@ -24,50 +24,5 @@
     return out;
   }
 
-  function ocrDataUrl(dataUrl) {
-    return new Promise(function (resolve) {
-      var fn = root.OCRAD;
-      if (typeof fn !== "function" || !dataUrl) {
-        resolve("");
-        return;
-      }
-      var img = new Image();
-      img.onload = function () {
-        try {
-          var w = img.naturalWidth || img.width;
-          var h = img.naturalHeight || img.height;
-          if (w < 24 || h < 24 || w * h > 16000000) {
-            resolve("");
-            return;
-          }
-          var scale = 1;
-          if (Math.max(w, h) < 900) scale = Math.min(2.2, 900 / Math.max(w, h));
-          var c = document.createElement("canvas");
-          c.width = Math.max(1, Math.round(w * scale));
-          c.height = Math.max(1, Math.round(h * scale));
-          var ctx = c.getContext("2d");
-          ctx.fillStyle = "#fff";
-          ctx.fillRect(0, 0, c.width, c.height);
-          ctx.drawImage(img, 0, 0, c.width, c.height);
-          var mixed = "";
-          try {
-            mixed = fn(c) || "";
-          } catch (_) {}
-          var nums = "";
-          try {
-            nums = fn(c, { numeric: true }) || "";
-          } catch (_) {}
-          resolve(String(mixed) + "\n" + String(nums));
-        } catch (_) {
-          resolve("");
-        }
-      };
-      img.onerror = function () {
-        resolve("");
-      };
-      img.src = dataUrl;
-    });
-  }
-
-  root.PeelPhones = { extractPhones: extractPhones, ocrDataUrl: ocrDataUrl };
-})(typeof globalThis !== "undefined" ? globalThis : this);
+  root.PeelPhones = { extractPhones: extractPhones };
+})(typeof globalThis !== 'undefined' ? globalThis : this);

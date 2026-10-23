@@ -14,7 +14,7 @@
     const re = /https?:\/\/[^\s<>"'\\]+/gi;
     let m;
     while ((m = re.exec(text))) {
-      let u = m[0].replace(/[),.;]+$/, "");
+      let u = m[0];
       if (found.indexOf(u) === -1) found.push(u);
     }
     return found;
@@ -23,12 +23,10 @@
     const text = unfold(raw);
     const urls = [];
     const lines = text.split(/\n/);
-    const interesting = /^(URL|LOCATION|DESCRIPTION|SUMMARY|X-GOOGLE-CONFERENCE|X-MICROSOFT-SKYPETEAMSMEETINGURL|X-ALT-DESC|COMMENT)/i;
     for (const line of lines) {
       const idx = line.indexOf(":");
       if (idx < 0) continue;
       const name = line.slice(0, idx).split(";")[0];
-      if (!interesting.test(name)) continue;
       const value = unescapeIcs(line.slice(idx + 1));
       for (const u of pullUrls(value)) {
         if (urls.indexOf(u) === -1) urls.push(u);

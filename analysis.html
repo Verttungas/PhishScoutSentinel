@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PhishScoutSentinel · Triaje SOC</title><link rel="stylesheet" href="analysis.css"></head>
+<body><header><div><span class="eyebrow">THUNDERBIRD / SOC WORKSPACE</span><h1>PhishScoutSentinel <small>0.1.0 · piloto</small></h1><p>Evidencia local. Originales separados. Decisiones revisables.</p></div><span class="badge">SIN CONEXIONES EXTERNAS DEL PANEL</span></header>
+<main><section class="toolbar"><label class="file-label">Abrir EML<input id="file" type="file" accept=".eml,message/rfc822"></label><button id="demo">Cargar ejemplo sintético</button><button id="cancel" disabled>Cancelar</button><button id="clear">Limpiar sesión</button><button id="export" disabled>Exportar JSON</button></section>
+<p id="status" role="status" aria-live="polite">Abre un EML o usa el botón de análisis del correo en Thunderbird.</p>
+<div class="workspace"><aside><h2>Mensajes del archivo</h2><p class="muted">Selecciona el mensaje que necesitas analizar.</p><div id="targets"></div><h3>Cobertura</h3><p>Texto y HTML como fuente; headers y adjuntos. Sin ejecución de HTML.</p><p class="muted">OCR, lectura de PDF y verificación externa de dominios aún no disponibles. No equivalen a resultados negativos.</p><div id="warnings" role="status"></div></aside>
+<article id="evidence" hidden><p id="target-notice" class="notice"></p><h2 id="subject"></h2><p id="provenance" class="muted"></p>
+<section><h3>Identidad y ruta de respuesta</h3><dl id="identity"></dl><p class="muted">Los resultados SPF/DKIM/DMARC aquí son headers declarados, sin validación de su procedencia. No heredes la autenticación del reportante.</p><details><summary>Headers originales de esta capa</summary><pre id="headers"></pre></details></section>
+<section><h3>Contenido</h3><pre id="body"></pre><details><summary>HTML original como código fuente</summary><pre id="html-source"></pre></details></section>
+<section><h3>Indicadores observados <span id="indicator-count"></span></h3><p class="muted">No son indicadores maliciosos por defecto. Cada fila conserva el valor y su procedencia. Los destinos extraídos no se han visitado.</p><div id="indicators"></div></section>
+<section><h3>Adjuntos</h3><div id="attachments"></div></section>
+<section><h3>Decisión del analista</h3><p>La recepción en un buzón de phishing no determina Internal Communication. Simulation necesita corroboración, no solo un dominio o header.</p>
+<label>Categoría<select id="category"><option value="">Pendiente de revisión</option><option>NTD</option><option>DNE</option><option>Simulation</option><option>FIR</option><option>Malicious</option></select></label>
+<label>Familia y subcategoría<select id="route"><option value="">Selecciona si corresponde</option></select></label>
+<label>Síntesis<textarea id="synopsis" rows="2"></textarea></label><label>Fundamento y evidencias<textarea id="rationale" rows="3"></textarea></label>
+<label>Corroboración de simulación: fuente, fecha y contexto del ejercicio<textarea id="simulation" rows="2"></textarea></label>
+<p class="muted">Catalogación separada: no marques víctima, reportante ni protección por asociación. Excepción del sender: no marcar si no es freemail, O si tiene más de un año Y sitio activo; datos desconocidos no permiten marcar por descarte. No extender a Reply-To distinto.</p>
+<label>Elementos a marcar, con tipo, valor exacto y motivo<textarea id="marked" rows="3" placeholder="Ninguno identificado con evidencia suficiente"></textarea></label>
+<label>Revisar en VM: elemento exacto y comprobación necesaria, si aplica<textarea id="vm" rows="2"></textarea></label>
+<button id="copy-report">Copiar informe revisado</button><p id="decision-status" role="status"></p></section>
+</article><div id="empty"><h2>El original, con su contexto.</h2><p>Abre un archivo EML para inspeccionar los mensajes y adjuntos que contiene.</p><p>El panel no modifica el correo almacenado ni navega a sus enlaces.</p></div></div></main>
+<script src="inflate-zlib.js"></script><script src="unwrap.js"></script><script src="ics.js"></script><script src="phones.js"></script><script type="module" src="analysis.mjs"></script></body></html>

@@ -1,14 +1,15 @@
 /** Minimal zlib inflate (header 0x78). Enough for Egress Base64Url payloads. */
-function inflateZlib(bytes) {
+function inflateZlib(bytes, maxOutput = 65536) {
   if (!bytes || bytes.length < 6) throw new Error("short");
-  if (bytes[0] !== 0x78) throw new Error("not zlib");
+  if (bytes.length > 65536 || !Number.isInteger(maxOutput) || maxOutput < 1 || maxOutput > 1048576) throw new Error("limit");
+  if ((bytes[0] & 15) !== 8 || (bytes[0] >> 4) > 7 || ((bytes[0] << 8) + bytes[1]) % 31 || (bytes[1] & 32)) throw new Error("not supported zlib");
   const src = bytes;
   let bitPos = 16;
   function bits(n) {
     let v = 0, g = 0;
     while (g < n) {
       const bi = bitPos >> 3;
-      if (bi >= src.length) throw new Error("oob");
+      if (bi >= src.length - 4) throw new Error("oob");
       v |= ((src[bi] >> (bitPos & 7)) & 1) << g;
       bitPos++;
       g++;
@@ -16,6 +17,10 @@ function inflateZlib(bytes) {
     return v;
   }
   const out = [];
+  function emit(value) {
+    if (out.length >= maxOutput || value == null) throw new Error("output limit or invalid data");
+    out.push(value);
+  }
   const litLenBase = [3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258];
   const litLenExtra = [0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0];
   const distBase = [1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577];
@@ -63,8 +68,9 @@ function inflateZlib(bytes) {
     throw new Error("bad huff");
   }
   function copyMatch(len, dist) {
+    if (!Number.isInteger(len) || !Number.isInteger(dist) || dist < 1 || dist > out.length || len < 3) throw new Error("bad match");
     const start = out.length - dist;
-    for (let i = 0; i < len; i++) out.push(out[start + i]);
+    for (let i = 0; i < len; i++) emit(out[start + i]);
   }
   let bfinal = 0;
   while (!bfinal) {
@@ -74,8 +80,10 @@ function inflateZlib(bytes) {
       bitPos = (bitPos + 7) & ~7;
       const bi = bitPos >> 3;
       const len = src[bi] | (src[bi + 1] << 8);
+      const nlen = src[bi + 2] | (src[bi + 3] << 8);
+      if ((len ^ nlen) !== 65535 || bi + 4 + len > src.length - 4) throw new Error("bad stored block");
       bitPos = (bi + 4) << 3;
-      for (let i = 0; i < len; i++) out.push(src[(bitPos >> 3) + i]);
+      for (let i = 0; i < len; i++) emit(src[(bitPos >> 3) + i]);
       bitPos += len * 8;
     } else if (btype === 1 || btype === 2) {
       let lit, dist;
@@ -93,6 +101,7 @@ function inflateZlib(bytes) {
           const s = decodeSym(clTree);
           if (s < 16) all.push(s);
           else if (s === 16) {
+            if (!all.length) throw new Error("bad repeat");
             const r = bits(2) + 3;
             const prev = all[all.length - 1];
             for (let i = 0; i < r; i++) all.push(prev);
@@ -104,23 +113,32 @@ function inflateZlib(bytes) {
             for (let i = 0; i < r; i++) all.push(0);
           }
         }
+        if (all.length !== hlit + hdist || !all[256]) throw new Error("bad lengths");
         lit = buildHuff(all.slice(0, hlit));
         dist = buildHuff(all.slice(hlit));
       }
       for (;;) {
         const s = decodeSym(lit);
-        if (s < 256) out.push(s);
+        if (s < 256) emit(s);
         else if (s === 256) break;
         else {
           const idx = s - 257;
+          if (idx < 0 || idx >= litLenBase.length) throw new Error("bad length symbol");
           const len = litLenBase[idx] + bits(litLenExtra[idx]);
           const ds = decodeSym(dist);
+          if (ds >= distBase.length) throw new Error("bad distance symbol");
           const distance = distBase[ds] + bits(distExtra[ds]);
           copyMatch(len, distance);
         }
       }
     } else throw new Error("bad btype");
   }
+  const end = (bitPos + 7) >> 3;
+  if (end + 4 !== src.length) throw new Error("trailing or missing data");
+  let a = 1, b = 0;
+  for (const v of out) {a = (a + v) % 65521; b = (b + a) % 65521;}
+  const checksum = ((src[end] << 24) | (src[end+1] << 16) | (src[end+2] << 8) | src[end+3]) >>> 0;
+  if ((((b << 16) | a) >>> 0) !== checksum) throw new Error("checksum mismatch");
   return new Uint8Array(out);
 }
 if (typeof module === "object") module.exports = { inflateZlib };
