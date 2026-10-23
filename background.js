@@ -448,7 +448,7 @@ async function lookupAge(domain) {
   return res;
 }
 
-async function addAges(tabId, messageId, layers) {
+async function addAges(tabId, messageId, layers, ocrInfo) {
   if (!(await rdapEnabled())) return;
   const domains = [];
   for (const layer of layers) for (const v of layer.verify) if (v.domain && !domains.includes(v.domain)) domains.push(v.domain);
@@ -462,7 +462,7 @@ async function addAges(tabId, messageId, layers) {
     layer.summary = PeelSignals.summary(layer);
     layer.rdap = "on";
   }
-  await sendWithRetry(tabId, messageId, { type: "signals", layers });
+  await sendWithRetry(tabId, messageId, { type: "signals", layers, ocr: ocrInfo });
 }
 
 async function pushExtrasToTab(tabId, messageId) {
@@ -472,8 +472,19 @@ async function pushExtrasToTab(tabId, messageId) {
   await sendWithRetry(tabId, messageId, { type: "nested-eml", messages: forDisplay(nested) });
   const urls = await collectIcsUrls(messageId);
   await sendWithRetry(tabId, messageId, { type: "ics-links", urls: urls });
+  await pushSignals(tabId, messageId, nested, urls);
+}
+
+// Insights for the message, with the text of any images read with OCR so far.
+async function pushSignals(tabId, messageId, nested, urls) {
   const outer = await collectOuterLayer(messageId);
+  const ocr = ocrResults.get(messageId);
+  if (ocr) {
+    outer.files = outer.files.concat(ocr.outer);
+    nested = nested.map((m, i) => Object.assign({}, m, { files: (m.files || []).concat(ocr.nested[i] || []) }));
+  }
   const layers = await analyzeLayers(outer, nested, urls);
+  const ocrInfo = { images: await countOcrImages(messageId, nested), state: ocrRunning.has(messageId) ? "running" : ocr ? "done" : "idle" };
   const rdap = await rdapEnabled();
   let state = rdap ? "pending" : "off";
   if (!rdap) {
@@ -482,9 +493,98 @@ async function pushExtrasToTab(tabId, messageId) {
     } catch (_) {}
   }
   for (const layer of layers) layer.rdap = state;
-  await sendWithRetry(tabId, messageId, { type: "signals", layers });
-  await addAges(tabId, messageId, layers);
+  await sendWithRetry(tabId, messageId, { type: "signals", layers, ocr: ocrInfo });
+  await addAges(tabId, messageId, layers, ocrInfo);
 }
+
+// --- On-demand OCR (ocr.js, tesseract.js in ocr/) ------------------------------------
+// Runs only when the analyst asks for it in the sidebar. Images of the displayed message
+// (inline or attached) and of attached messages are read locally; the text goes into
+// the insights as if it were the body.
+const OCR_MIN_BYTES = 15000;
+const OCR_MAX_IMAGES = 6;
+const ocrResults = new Map();
+const ocrRunning = new Set();
+
+function dataUrlBytes(dataUrl) {
+  const b64 = String(dataUrl || "").split(",")[1] || "";
+  return Math.floor((b64.length * 3) / 4);
+}
+
+async function ocrImages(messageId, nested) {
+  const outer = [];
+  try {
+    const full = await messenger.messages.getFull(messageId);
+    const parts = [];
+    walkParts(full, parts);
+    for (const part of parts) {
+      if (part === full || !part.partName) continue;
+      const mime = imageMime(part.name || part.filename, part.contentType);
+      if (!mime || mime === "image/svg+xml" || mime === "image/x-icon") continue;
+      if (part.size && (part.size < OCR_MIN_BYTES || part.size > MAX_IMAGE_BYTES)) continue;
+      outer.push({ name: part.name || part.filename || "image", partName: part.partName, size: part.size || 0 });
+    }
+  } catch (_) {}
+  outer.sort((a, b) => b.size - a.size);
+  const inner = (nested || []).map((m) => (m.images || []).filter((img) => dataUrlBytes(img.dataUrl) >= OCR_MIN_BYTES).slice(0, OCR_MAX_IMAGES));
+  return { outer: outer.slice(0, OCR_MAX_IMAGES), nested: inner };
+}
+
+async function countOcrImages(messageId, nested) {
+  const found = await ocrImages(messageId, nested);
+  return found.outer.length + found.nested.reduce((n, list) => n + list.length, 0);
+}
+
+async function runOcr(tabId) {
+  const messageId = displayedInTab.get(tabId);
+  if (messageId == null || ocrRunning.has(messageId)) return;
+  ocrRunning.add(messageId);
+  const status = (text, state) => sendWithRetry(tabId, messageId, { type: "ocr-status", text, state: state || "running" });
+  try {
+    const nested = await collectNested(messageId);
+    const found = await ocrImages(messageId, nested);
+    const total = found.outer.length + found.nested.reduce((n, list) => n + list.length, 0);
+    if (!total) {
+      await status("No images large enough to read.", "idle");
+      return;
+    }
+    const result = { outer: [], nested: [] };
+    let k = 0;
+    await status("Loading OCR (the first time takes a few seconds)…");
+    for (const img of found.outer) {
+      await status("Reading image " + ++k + " of " + total + "…");
+      const file = await messenger.messages.getAttachmentFile(messageId, img.partName);
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const out = await PeelOcr.recognize(new Blob([bytes], { type: imageMime(img.name, file.type) || "image/png" }));
+      result.outer.push(PeelSignals.ocrFile(img.name, out.text, out.confidence, await sha256Hex(bytes)));
+    }
+    for (let i = 0; i < found.nested.length; i++) {
+      result.nested[i] = [];
+      for (const img of found.nested[i]) {
+        await status("Reading image " + ++k + " of " + total + "…");
+        const out = await PeelOcr.recognize(img.dataUrl);
+        result.nested[i].push(PeelSignals.ocrFile(img.name || "image", out.text, out.confidence, ""));
+      }
+    }
+    ocrResults.set(messageId, result);
+    // Keep the text of the last few messages only.
+    while (ocrResults.size > 20) ocrResults.delete(ocrResults.keys().next().value);
+    ocrRunning.delete(messageId);
+    await status("Read " + total + " image" + (total === 1 ? "" : "s") + " with OCR.", "done");
+    if (displayedInTab.get(tabId) === messageId) await pushSignals(tabId, messageId, nested, await collectIcsUrls(messageId));
+  } catch (e) {
+    await status("OCR failed: " + String((e && e.message) || e).slice(0, 120), "error");
+  } finally {
+    ocrRunning.delete(messageId);
+  }
+}
+
+messenger.runtime.onMessage.addListener((msg, sender) => {
+  if (msg && msg.type === "ocr-run" && sender && sender.tab) {
+    runOcr(sender.tab.id);
+    return Promise.resolve(true);
+  }
+});
 
 if (messenger.messageDisplay && messenger.messageDisplay.onMessageDisplayed) {
   messenger.messageDisplay.onMessageDisplayed.addListener(async (tab, message) => {

@@ -565,10 +565,14 @@
     const quoteUnrelated = !!quotedPart && words(quotedPart) > 30 && !quoteParties.some(function (d) { return knownDomains.indexOf(d) >= 0; });
     // A message that is little more than its own quote keeps the quote.
     const ownText = !quotedPart || quoteUnrelated || words(ownOnly) >= 15 ? ownOnly : stripBanners(bodyText);
-    const text = (isWrapper ? "" : subject + "\n") + ownText;
+    const allFiles = (msg.files || []).filter(function (f) { return f.scan && f.scan.ok; });
+    // Text read from images (OCR, on demand) is what the email shows: it counts as the body.
+    const images = allFiles.filter(function (f) { return f.kind === "image"; });
+    const imageText = images.map(function (f) { return f.scan.text || ""; }).join("\n");
+    const text = (isWrapper ? "" : subject + "\n") + ownText + (imageText && !isWrapper ? "\n" + imageText : "");
     const attachments = msg.attachments || [];
-    const files = (msg.files || []).filter(function (f) { return f.scan && f.scan.ok; });
-    const fileText = files.map(function (f) { return f.scan.text || ""; }).join("\n");
+    const files = allFiles.filter(function (f) { return f.kind !== "image"; });
+    const fileText = files.map(function (f) { return f.scan.text || ""; }).join("\n") + (imageText ? "\n" + imageText : "");
     // What the lure says, wherever it says it (body or the PDF it comes in).
     const contentText = text + (fileText ? "\n" + fileText : "");
     const links = extractLinks(msg.html, msg.text);
@@ -883,6 +887,15 @@
       }
     }
 
+    for (const f of images) {
+      notes.push("Text read from “" + f.name + "” with OCR (" + (f.scan.confidence || 0) + "% confidence): numbers and addresses in it may need a second look.");
+      for (const u of f.scan.uris || []) {
+        verify.push({ what: u, why: "URL written inside the image “" + f.name + "” (OCR, not a clickable link): check it in the VM." });
+        const look = lookalikeBrand(hostOf(u));
+        if (look) add(null, "strong", "URL inside the image imitates the “" + look + "” brand", u);
+      }
+    }
+
     // --- Lure carried by an attachment instead of the body ---------------------------
     const bigMedia = attachments.filter(function (a) {
       const ct = String(a.contentType || "").toLowerCase();
@@ -906,7 +919,8 @@
       // Link → O365 when the lure imitates a Microsoft/Google (or document-sharing)
       // sign-in; a bank's or another brand's portal is Link → Phishing.
       const lureText = foldText(subject + "\n" + from.name + "\n" + text);
-      const claimed = brandWord(lureText) || (Object.keys(R.BRANDS).filter(function (b) { return !/^(microsoft|office365|sharepoint|onedrive|outlook|google|docusign|adobe|dropbox)$/.test(b); })
+      const word = brandWord(lureText);
+      const claimed = (word && !word.workplace ? word : null) || (Object.keys(R.BRANDS).filter(function (b) { return R.WORKPLACE_BRANDS.indexOf(b) < 0; })
         .map(function (b) { return lower(lureText).replace(/\s+/g, "").indexOf(b) >= 0 ? { name: b } : null; }).filter(Boolean)[0]) || null;
       const msNamed = R.O365_LURE.test(lureText);
       const linkRoute = claimed && !msNamed ? "phishing" : "o365";
@@ -983,7 +997,7 @@
     const vishBrand = foldText(contentText).match(R.PHRASES.vishingBrands);
     const inFile = fileText && cbPhones.some(function (p) { return fileText.indexOf(p) !== -1; });
     if (cbPhones.length && (vishHits.length || vishBrand)) {
-      add("vishing", vishBrand && vishHits.length ? "strong" : "weak", "Callback number" + (inFile ? " in the PDF" : "") + " next to " + (vishBrand ? "the “" + vishBrand[0] + "” brand" : "") + (vishBrand && vishHits.length ? " and " : "") + (vishHits.length ? vishHits.map(function (x) { return x.label.toLowerCase(); }).join(", ") : ""), cbPhones.join(" · "));
+      add("vishing", vishBrand && vishHits.length ? "strong" : "weak", "Callback number" + (inFile ? " in the attachment" : "") + " next to " + (vishBrand ? "the “" + vishBrand[0] + "” brand" : "") + (vishBrand && vishHits.length ? " and " : "") + (vishHits.length ? vishHits.map(function (x) { return x.label.toLowerCase(); }).join(", ") : ""), cbPhones.join(" · "));
       for (const p of cbPhones.slice(0, 3)) addIoc("Cellphone", p, "Callback number of the lure");
     } else if (vishBrand && vishHits.length) {
       add("vishing", "weak", "“" + vishBrand[0] + "” invoice lure (look for the phone number in images, PDF or invite)", vishHits.map(function (x) { return x.label; }).join(", "));
@@ -1172,6 +1186,7 @@
       sublime,
       language: language ? language.name : "",
       // Everything observed, for the Indicators tab (candidates stay in iocs).
+      ocrTexts: images.map(function (f) { return { name: f.name, text: f.scan.text || "", confidence: f.scan.confidence || 0 }; }),
       inventory: {
         links: links.concat(fileLinks).map(function (l) {
           return { text: l.text, href: l.href, url: l.final, dest: l.dest !== l.final ? l.dest : "", host: l.host, layers: l.layers || [], flags: (l.flags || []).concat(l.file ? ["In PDF " + l.file] : []), action: actionLinks.indexOf(l) !== -1 || !!l.file };
@@ -1185,7 +1200,7 @@
         phones: phones,
         attachments: attachments.map(function (a) {
           const f = (msg.files || []).find(function (x) { return x.name === a.name; });
-          return { name: a.name || "(no name)", type: a.contentType || "", sha256: f && f.sha256 ? f.sha256 : "", info: f && f.scan ? pdfSummary(f.scan) : "" };
+          return { name: a.name || "(no name)", type: a.contentType || "", sha256: f && f.sha256 ? f.sha256 : "", info: f && f.scan ? (f.kind === "image" ? "Read with OCR (" + (f.scan.confidence || 0) + "% confidence)" : pdfSummary(f.scan)) : "" };
         }),
       },
     };
@@ -1200,6 +1215,15 @@
     if (sc.features.length) parts.push(sc.features.join(", "));
     if (!sc.text && sc.images) parts.push("no text layer");
     return "PDF: " + parts.join(" · ");
+  }
+
+  // An image read with OCR, as a "file" the engine reads like a PDF's text.
+  function ocrFile(name, text, confidence, sha256) {
+    const t = String(text || "");
+    const uris = (t.match(/\bhttps?:\/\/[^\s<>"')\]]+|\b(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|net|org|info|biz|io|co|ca|us|uk|de|fr|es|mx|ru|cn|top|xyz|online|site|app|dev)(?:\/[^\s<>"')\]]*)?/gi) || [])
+      .map(function (u) { return /^https?:/i.test(u) ? u : "https://" + u; })
+      .filter(function (u, i, a) { return a.indexOf(u) === i && !/@/.test(u); });
+    return { name: name || "image", kind: "image", sha256: sha256 || "", scan: { ok: true, kind: "image", pages: 1, encrypted: false, uris: uris.slice(0, 10), text: t, confidence: Math.round(confidence || 0), features: [], producer: "", creator: "", title: "", images: 1 } };
   }
 
   function addressesIn(value) {
@@ -1220,8 +1244,8 @@
   function scanFiles(msg, recipients) {
     const body = (msg.text || htmlToText(msg.html)) + "\n" + String((msg.headers || {}).subject || msg.subject || "");
     return (msg.files || []).map(function (f) {
-      const scan = Pdf && f.bytes ? Pdf.scan(toBytes(f.bytes), { passwords: Pdf.passwordHints(body, recipients) }) : null;
-      return { name: f.name, size: f.size, contentType: f.contentType, sha256: f.sha256 || "", scan };
+      const scan = f.scan || (Pdf && f.bytes ? Pdf.scan(toBytes(f.bytes), { passwords: Pdf.passwordHints(body, recipients) }) : null);
+      return { name: f.name, kind: f.kind || "pdf", size: f.size, contentType: f.contentType, sha256: f.sha256 || "", scan };
     });
   }
 
@@ -1373,5 +1397,5 @@
     return lines.join("\n");
   }
 
-  return { analyze, analyzeAll, summary, applyAges, regDomain, isFreemail, parseAddress, extractLinks, hiddenText, lookalikeBrand, detectLanguage, receivedIps, stripBanners, foldText, redirectHop, callbackPhones };
+  return { analyze, analyzeAll, ocrFile, summary, applyAges, regDomain, isFreemail, parseAddress, extractLinks, hiddenText, lookalikeBrand, detectLanguage, receivedIps, stripBanners, foldText, redirectHop, callbackPhones };
 });

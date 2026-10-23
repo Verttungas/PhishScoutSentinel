@@ -101,9 +101,13 @@
     { name: "Bank of America", re: /bank of america/i, domains: ["bankofamerica.com", "bofa.com"] },
     { name: "Chase", re: /\bjp ?morgan chase\b|\bchase bank\b/i, domains: ["chase.com", "jpmorgan.com", "jpmorganchase.com"] },
     { name: "QuickBooks", re: /quick ?books|\bintuit\b/i, domains: ["intuit.com", "quickbooks.com", "intuit.ca"] },
-    { name: "Rippling", re: /\brippling\b/i, domains: ["rippling.com"] },
+    { name: "Rippling", re: /\brippling\b/i, domains: ["rippling.com"], workplace: true },
     { name: "Interac", re: /\binterac\b/i, domains: ["interac.ca"] },
   ];
+
+  // Work tools that sign in through the organisation's Microsoft/Google account: a lure
+  // in their name is Link → O365, unlike a bank's or a shop's own portal (Link → Phishing).
+  const WORKPLACE_BRANDS = ["microsoft", "office365", "sharepoint", "onedrive", "outlook", "google", "docusign", "adobe", "dropbox", "rippling", "wetransfer", "zoom", "slack", "workday", "adp", "okta", "salesforce", "servicenow"];
 
   // Products whose sign-in a credential lure imitates for Link → O365 (incl. Google).
   const O365_LURE = /microsoft|office ?365|\bm365\b|outlook|sharepoint|onedrive|\bteams\b|exchange|webmail|mailbox|google|gmail|docusign|adobe|dropbox|storage|held (incoming )?(messages|e-?mails)/i;
@@ -294,6 +298,6 @@
   return {
     ROUTES, FREEMAIL, MULTI_LEVEL_SUFFIXES, BRANDS, DEFENSIVE_HOSTS, SHORTENERS, FREE_HOSTING, ESP_TRACKING, UNSUBSCRIBE,
     EXEC_TITLES, PHRASES, DOC_ATTACHMENT, HTML_ATTACHMENT, BANNER, DISCLAIMER, PHONE_SIGNATURE, PHONE_CTA,
-    BRAND_WORDS, O365_LURE, SEND_PLATFORMS, SOCIAL_HOSTS, NOTIFICATION_NAME, SIMULATION_MARKERS, SUSPICIOUS_WEAK,
+    BRAND_WORDS, WORKPLACE_BRANDS, O365_LURE, SEND_PLATFORMS, SOCIAL_HOSTS, NOTIFICATION_NAME, SIMULATION_MARKERS, SUSPICIOUS_WEAK,
   };
 });

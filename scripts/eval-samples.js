@@ -20,11 +20,14 @@ const N = require(path.join(REPO, "nested.js"));
 const ICS = require(path.join(REPO, "ics.js"));
 
 const args = process.argv.slice(2);
-const root = args.find((a, i) => !a.startsWith("--") && !["--json", "--settings"].includes(args[i - 1]));
+const root = args.find((a, i) => !a.startsWith("--") && !["--json", "--settings", "--ocr-cache"].includes(args[i - 1]));
 const jsonOut = args.includes("--json") ? args[args.indexOf("--json") + 1] : null;
 const verbose = args.includes("--verbose");
 // Optional JSON with the popup's settings: {"simulationDomains": [{"domain", "vendor", "source"}], "orgDomains": []}.
 const settings = args.includes("--settings") ? JSON.parse(fs.readFileSync(args[args.indexOf("--settings") + 1], "utf8")) : {};
+// Optional OCR results, as the sidebar's "Read images (OCR)" would add them:
+// {"<sha256 of the image bytes>": {"text": "...", "confidence": 90}} (see scripts/ocr-images.html).
+const ocrCache = args.includes("--ocr-cache") ? JSON.parse(fs.readFileSync(args[args.indexOf("--ocr-cache") + 1], "utf8")) : null;
 if (!root) {
   console.error("Usage: node scripts/eval-samples.js <samples folder> [--json out.json] [--verbose]");
   process.exit(1);
@@ -67,6 +70,22 @@ function withHashes(files) {
   return (files || []).map((f) => Object.assign({}, f, { sha256: crypto.createHash("sha256").update(Buffer.from(f.bytes, "latin1")).digest("hex") }));
 }
 
+// Images the sidebar would read with OCR (≥ 15 KB, six largest), with their cached text.
+function ocrFiles(msg) {
+  if (!ocrCache) return [];
+  const imgs = (msg.images || [])
+    .map((img) => ({ name: img.name || "image", bytes: Buffer.from(String(img.dataUrl).split(",")[1] || "", "base64") }))
+    .filter((img) => img.bytes.length >= 15000 && !/svg|icon/.test(img.name))
+    .sort((a, b) => b.bytes.length - a.bytes.length)
+    .slice(0, 6);
+  const out = [];
+  for (const img of imgs) {
+    const sha = crypto.createHash("sha256").update(img.bytes).digest("hex");
+    if (ocrCache[sha]) out.push(S.ocrFile(img.name, ocrCache[sha].text, ocrCache[sha].confidence, sha));
+  }
+  return out;
+}
+
 function icsUrls(raw) {
   const urls = [];
   for (const c of raw.match(/BEGIN:VCALENDAR[\s\S]*?END:VCALENDAR/g) || []) for (const u of ICS.parseIcsUrls(c)) if (!urls.includes(u)) urls.push(u);
@@ -82,13 +101,13 @@ function analyse(raw) {
     text: top.text,
     html: top.html,
     attachments: top.attachments,
-    files: withHashes(top.files),
+    files: withHashes(top.files).concat(ocrFiles(top)),
     hasNestedEml: !!(top.nested && top.nested.length),
   };
   const nested = [];
   (function push(list) {
     for (const m of list || []) {
-      if (m.html || m.text || (m.images && m.images.length)) nested.push(Object.assign({}, m, { files: withHashes(m.files), hasNestedEml: !!(m.nested && m.nested.length) }));
+      if (m.html || m.text || (m.images && m.images.length)) nested.push(Object.assign({}, m, { files: withHashes(m.files).concat(ocrFiles(m)), hasNestedEml: !!(m.nested && m.nested.length) }));
       push(m.nested);
     }
   })(top.nested);

@@ -969,6 +969,23 @@
   const qrHints = [];
   let layersData = [];
   let selectedLayer = 0;
+  // Images the background can read with OCR, and where that stands.
+  let ocrInfo = { images: 0, state: "idle", text: "" };
+
+  function runOcr(button) {
+    if (!api || !api.runtime || !api.runtime.sendMessage || ocrInfo.state === "running") return;
+    ocrInfo.state = "running";
+    ocrInfo.text = "Starting OCR…";
+    if (button) {
+      button.disabled = true;
+      button.textContent = ocrInfo.text;
+    }
+    api.runtime.sendMessage({ type: "ocr-run" }).catch(function () {
+      ocrInfo.state = "error";
+      ocrInfo.text = "OCR could not start.";
+      renderAll();
+    });
+  }
 
   function noteQr(where, payload, hint) {
     qrHints.push({ where: where, payload: String(payload || ""), hint: hint });
@@ -1082,6 +1099,10 @@
       ov.appendChild(seg);
     }
     for (const n of res.notes || []) ov.appendChild(el("p", "callout", n));
+    if (ocrInfo.images && ocrInfo.state === "idle" && res.general.some(function (s) { return /^No text of its own/.test(s.label); })) {
+      ov.appendChild(el("p", "callout", "The content seems to be inside an image: “Read images (OCR)” reads it on this computer and adds it to the evidence."));
+    }
+    if (ocrInfo.state === "error" && ocrInfo.text) ov.appendChild(el("p", "callout", ocrInfo.text));
     ov.appendChild(el("h2", "ov-heading", "Where the evidence points"));
     const routes = res.routes.slice(0, 4);
     if (routes.length) {
@@ -1110,6 +1131,15 @@
     copy.title = "Copy the analyst summary for this message";
     copy.addEventListener("click", function () { copyWithFeedback(res.summary || "", copy, "summary"); });
     actions.appendChild(copy);
+    if (ocrInfo.images) {
+      const label = ocrInfo.state === "running" ? ocrInfo.text || "Reading images…" : ocrInfo.state === "done" ? "Images read (OCR)" : "Read images (OCR)";
+      const ocrBtn = el("button", "btn", label);
+      ocrBtn.type = "button";
+      ocrBtn.title = "Read the text inside the " + ocrInfo.images + " image" + (ocrInfo.images === 1 ? "" : "s") + " of this message, on this computer (eng, fra, spa)";
+      ocrBtn.disabled = ocrInfo.state === "running" || ocrInfo.state === "done";
+      ocrBtn.addEventListener("click", function () { runOcr(ocrBtn); });
+      actions.appendChild(ocrBtn);
+    }
     const meta = [];
     if (res.language) meta.push(res.language);
     if (res.sublime && res.sublime.length) meta.push(res.sublime.length + " Sublime rule" + (res.sublime.length === 1 ? "" : "s"));
@@ -1148,6 +1178,17 @@
       const g = group("Technical signals", res.general.length);
       for (const sig of res.general) g.list.appendChild(signalItem(sig));
       total += res.general.length;
+      box.appendChild(g.node);
+    }
+    if ((res.ocrTexts || []).length) {
+      const g = group("Text read from images (OCR)", res.ocrTexts.length);
+      for (const o of res.ocrTexts) {
+        const li = el("li", "item");
+        li.appendChild(el("span", "item-label", o.name));
+        li.appendChild(el("span", "item-sub", o.confidence + "% confidence" + (o.text ? "" : " · no text found")));
+        if (o.text) li.appendChild(valueButton(o.text, "OCR text"));
+        g.list.appendChild(li);
+      }
       box.appendChild(g.node);
     }
     if (qrHints.length) {
@@ -1298,7 +1339,16 @@
       if (msg.type === "ics-links") showIcsBanner(msg.urls || []);
       if (msg.type === "nested-eml") showNested(msg.messages || []);
       if (msg.type === "image-attachments") showImageAttachments(msg.images || []);
-      if (msg.type === "signals") showSignals(msg.layers || []);
+      if (msg.type === "signals") {
+        if (msg.ocr) ocrInfo = Object.assign({ text: "" }, msg.ocr);
+        showSignals(msg.layers || []);
+      }
+      if (msg.type === "ocr-status") {
+        ocrInfo.state = msg.state || ocrInfo.state;
+        ocrInfo.text = msg.text || "";
+        if (msg.state !== "running") setStatus(msg.text || "");
+        if (layersData.length) renderOverview(layersData[selectedLayer]);
+      }
     });
   }
 

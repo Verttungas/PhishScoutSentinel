@@ -4,7 +4,7 @@ Thunderbird add-on that removes email-security URL wrappers (every known layer) 
 
 A normal click opens the destination URL in your browser. The stored `.eml` is not changed. PeelScout does not need internet to run (the optional domain-age lookup — RDAP, then whois.com — is the only network use, and it is off by default).
 
-Not in this version: QR inside PDF attachments, OCR of images (an image-only lure is flagged, not read), Outlook `.msg` attachments. Translator is not included.
+Not in this version: QR or OCR inside PDF pages (a scanned PDF is flagged, not read), Outlook `.msg` attachments. Translator is not included.
 
 ## Install in Thunderbird
 
@@ -37,6 +37,7 @@ Requires Thunderbird 128+.
 - New: Response routes — addresses the body asks to write or pay to (Interac / e-transfer) are extracted; a Reply-To on another domain is no longer BEC by itself (and is normal for webinar platforms); implausible returns (≥ 100 %), personal-details forms and debt collection from freemail point to 419 ahead of a short-message RECON; asking for a mobile number from freemail is BEC (SEA p. 7); family-office and software-outsourcing pitches are RECON. Once a Response route has strong evidence, the Reply-To, the body's contact/payment address and a freemail sender become candidates
 - New: lure phrases for held messages / full mailbox, pending tasks, tenders, leave requests, W-9, secure-email portals; bank and payroll brands (TD, Scotiabank, Desjardins, Wells Fargo, USAA, RBC, QuickBooks, Rippling…); a secure-message lure of a bank or another brand is Link → Phishing, a Microsoft/Google one Link → O365
 - New: Simulation hypothesis — ThreatSim-style Message-IDs and campaign pixels are weak hints; domains the team lists in the popup (**Team settings**, with vendor and source) identify the exercise, go first and clear the candidates. Organisation domains can be listed there too. Both are saved in this Thunderbird profile only
+- New: **OCR on demand** — "Read images (OCR)" in the sidebar reads the images of the message (inline, attached and inside attached emails; ≥ 15 KB, six largest) with a local copy of tesseract.js 5.1.1 (English, French, Spanish). The text joins the evidence as if it were the body (callback numbers, payment addresses, brands, URLs written in the image), and is listed under "Text read from images". Nothing is downloaded or sent: the library, the WebAssembly core and the language models ship in `ocr/` (about 9.5 MB; first use takes a few seconds), and the worker closes after three idle minutes
 - New: Do Not Engage / No Threat Detected hypotheses when no route has strong evidence, always shown after the routes
 - Fix: click trackers named after the sender (mail-merge tools such as YAMM), Gmail signature images and social-profile links are not action links
 - Fix: phone numbers become Vishing candidates only next to a call to action, not in signatures or in a quoted old thread
@@ -151,3 +152,12 @@ node scripts/eval-samples.js "/path/to/EML Samples" --json results.json
 ```
 
 Keep the samples outside the repository: they are real customer mail.
+
+To include OCR in the measurement, read the samples' images with the add-on's own OCR (it is the browser build, so the script serves a page on 127.0.0.1 for any browser to open) and pass the result:
+
+```bash
+node scripts/ocr-samples.js "/path/to/EML Samples" ocr-cache.json
+node scripts/eval-samples.js "/path/to/EML Samples" --ocr-cache ocr-cache.json
+```
+
+The `.xpi` must include `ocr/` and `ocr.js`. The files in `ocr/` are tesseract.js 5.1.1, tesseract.js-core 5.1.1 (`tesseract-core-simd-lstm.wasm.js`) and @tesseract.js-data 1.0.0 (`4.0.0_best_int` models), all Apache-2.0 (licenses in `ocr/`); `test/ocr.test.js` pins their SHA-256.

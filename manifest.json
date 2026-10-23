@@ -10,10 +10,11 @@
       "strict_min_version": "128.0"
     }
   },
+  "content_security_policy": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';",
   "permissions": ["messagesRead", "messagesModify", "menus", "clipboardWrite", "storage"],
   "optional_permissions": ["https://*/*"],
   "background": {
-    "scripts": ["inflate-zlib.js", "unwrap.js", "phones.js", "sublime-data.js", "sublime-rules.js", "rules.js", "forwards.js", "pdfscan.js", "signals.js", "ics.js", "nested.js", "background.js"]
+    "scripts": ["inflate-zlib.js", "unwrap.js", "phones.js", "sublime-data.js", "sublime-rules.js", "rules.js", "forwards.js", "pdfscan.js", "signals.js", "ics.js", "nested.js", "ocr.js", "background.js"]
   },
   "message_display_action": {
     "default_title": "PeelScout",
