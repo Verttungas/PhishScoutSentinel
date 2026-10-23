@@ -255,10 +255,29 @@ async function collectImageAttachments(messageId) {
 
 const SIGNAL_HEADERS = ["from", "reply-to", "return-path", "to", "cc", "subject", "date", "message-id", "in-reply-to", "references", "authentication-results", "received"];
 
+async function sha256Hex(bytes) {
+  try {
+    const d = await crypto.subtle.digest("SHA-256", bytes);
+    return Array.from(new Uint8Array(d)).map((b) => b.toString(16).padStart(2, "0")).join("");
+  } catch (_) {
+    return "";
+  }
+}
+
+function binaryToBytes(bin) {
+  const b = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i) & 0xff;
+  return b;
+}
+
+const MAX_PDF_BYTES = 12 * 1024 * 1024;
+const MAX_PDFS = 5;
+
 // The displayed message as one layer for the "Indicios" panel: its own headers,
 // first plain/HTML bodies and attachments (attached messages are separate layers).
+// PDF attachments are read for the static scan in signals.js (pdfscan.js).
 async function collectOuterLayer(messageId) {
-  const layer = { layer: "outer", label: "", headers: {}, text: "", html: "", attachments: [], hasNestedEml: false };
+  const layer = { layer: "outer", label: "", headers: {}, text: "", html: "", attachments: [], files: [], hasNestedEml: false };
   try {
     const full = await messenger.messages.getFull(messageId);
     for (const k of SIGNAL_HEADERS) {
@@ -280,7 +299,16 @@ async function collectOuterLayer(messageId) {
         continue;
       }
       if (name || disposition.indexOf("attachment") === 0) {
-        layer.attachments.push({ name, contentType: ct });
+        layer.attachments.push({ name, contentType: ct, size: part.size || 0 });
+        if (PeelPdf.isPdf(name, ct) && part.partName && layer.files.length < MAX_PDFS && !(part.size > MAX_PDF_BYTES)) {
+          try {
+            const file = await messenger.messages.getAttachmentFile(messageId, part.partName);
+            if (file.size <= MAX_PDF_BYTES) {
+              const bytes = new Uint8Array(await file.arrayBuffer());
+              layer.files.push({ name, contentType: ct, size: file.size, bytes, sha256: await sha256Hex(bytes) });
+            }
+          } catch (_) {}
+        }
         continue;
       }
       if (ct.indexOf("text/plain") === 0 && !layer.text && part.body) layer.text = part.body;
@@ -290,28 +318,28 @@ async function collectOuterLayer(messageId) {
   return layer;
 }
 
-function analyzeLayers(outer, nested, icsUrls) {
-  const layers = [];
+// Layers for the sidebar: the opened message (or, for a report with the original
+// forwarded in its body, the report and the rebuilt original) and attached messages.
+async function analyzeLayers(outer, nested, icsUrls) {
   try {
-    if (icsUrls.length) outer.text = (outer.text || "") + "\n" + icsUrls.join("\n");
-    outer.label = "Opened message";
-    layers.push(PeelSignals.analyze(outer));
-    nested.forEach((m, i) => {
-      layers.push(
-        PeelSignals.analyze({
-          layer: "nested",
-          label: "Attached email " + (i + 1) + (m.filename ? " · " + m.filename : "") + (m.subject ? " · " + m.subject : ""),
-          headers: m.headers,
-          subject: m.subject,
-          text: m.text,
-          html: m.html,
-          attachments: m.attachments,
-          hasNestedEml: m.hasNestedEml,
-        })
-      );
-    });
-  } catch (_) {}
-  return layers.map((r) => Object.assign(r, { summary: PeelSignals.summary(r) }));
+    const withHashes = [];
+    for (const m of nested) {
+      const files = [];
+      for (const f of m.files || []) {
+        const bytes = binaryToBytes(f.bytes);
+        files.push({ name: f.name, contentType: f.contentType, size: f.size, bytes, sha256: await sha256Hex(bytes) });
+      }
+      withHashes.push(Object.assign({}, m, { files }));
+    }
+    return PeelSignals.analyzeAll(outer, withHashes, icsUrls);
+  } catch (_) {
+    return [];
+  }
+}
+
+// What the message tab needs of an attached message (not the PDF bytes).
+function forDisplay(nested) {
+  return nested.map((m) => Object.assign({}, m, { files: undefined }));
 }
 
 // --- Optional domain-age lookup (RDAP, then whois.com) -----------------------------
@@ -424,11 +452,11 @@ async function pushExtrasToTab(tabId, messageId) {
   const images = await collectImageAttachments(messageId);
   await sendWithRetry(tabId, messageId, { type: "image-attachments", images });
   const nested = await collectNested(messageId);
-  await sendWithRetry(tabId, messageId, { type: "nested-eml", messages: nested });
+  await sendWithRetry(tabId, messageId, { type: "nested-eml", messages: forDisplay(nested) });
   const urls = await collectIcsUrls(messageId);
   await sendWithRetry(tabId, messageId, { type: "ics-links", urls: urls });
   const outer = await collectOuterLayer(messageId);
-  const layers = analyzeLayers(outer, nested, urls);
+  const layers = await analyzeLayers(outer, nested, urls);
   const rdap = await rdapEnabled();
   let state = rdap ? "pending" : "off";
   if (!rdap) {

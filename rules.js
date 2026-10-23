@@ -24,6 +24,7 @@
     firMissingContent: "FIR → Missing Content",
     firMissingHeaders: "FIR → Missing Headers",
     firInternal: "FIR → Internal Communication",
+    firEncrypted: "FIR → Content Encrypted",
   };
 
   // Free mail / ISP providers (SEA p. 5–7; shaw.ca and gmx.com are named there).
@@ -110,7 +111,7 @@
       [/onedrive/i, "OneDrive file shared"],
       [/review (the )?(attached )?document|revisar (el )?documento|documento para (su )?revisi[oó]n|consulter le document|revisar o documento|dokument (pr[uü]fen|ansehen)|rivedere il documento|document (bekijken|beoordelen)/i, "Review document"],
       [/(secure|secured|protected|encrypted) (message|document|file)|mensaje (seguro|protegido|cifrado)|message (s[eé]curis[eé]|chiffr[eé]|prot[eé]g[eé])|mensagem (segura|protegida|criptografada)|(sichere|verschl[uü]sselte) nachricht|messaggio (sicuro|protetto|crittografato)|(beveiligd|versleuteld) bericht/i, "Secure / protected message"],
-      [/shared (a |the )?(file|document|folder) with you|ha compartido (un |el )?(archivo|documento)|compartió (un |el )?(archivo|documento)|a partag[eé] (un |le )?(fichier|document)|compartilhou (um |o )?(arquivo|documento)|hat (eine datei|ein dokument) (mit ihnen )?geteilt|ha condiviso (un |il )?(file|documento)|heeft (een bestand|een document) (met u )?gedeeld/i, "Shared file"],
+      [/shared (a |the )?(file|doc[uv]ment|folder)( with you)?|ha compartido (un |el )?(archivo|documento)|compartió (un |el )?(archivo|documento)|a partag[eé] (un |le )?(fichier|document)|compartilhou (um |o )?(arquivo|documento)|hat (eine datei|ein dokument) (mit ihnen )?geteilt|ha condiviso (un |il )?(file|documento)|heeft (een bestand|een document) (met u )?gedeeld/i, "Shared file"],
       [/verify (your )?(account|email|identity|mailbox)|verifica(r)? (su |tu )?(cuenta|correo|identidad)|confirm (your )?(account|credentials)|v[eé]rifie[rz]? (votre )?(compte|identit[eé])|verifi(car|que) (sua |a )?(conta|identidade)|(konto|identit[aä]t) (best[aä]tigen|verifizieren)|verifica(re)? (il tuo |il )?account|(account|identiteit) (verifi[eë]ren|bevestigen)/i, "Verify account"],
       [/password (expire|expiration|reset|will expire)|contraseña (caduca|expira|vence)|mot de passe (expire|expir[eé])|senha (expira|vai expirar)|passwort (l[aä]uft ab|abgelaufen)|password (scade|scaduta)|wachtwoord (verloopt|verlopen)|mailbox (is )?(full|storage|quota)|buz[oó]n (lleno|almacenamiento)|bo[iî]te (aux lettres )?pleine|caixa (de correio )?cheia|postfach (ist )?voll|casella (di posta )?piena|mailbox (is )?vol/i, "Password / mailbox"],
       [/sign in to (view|access|open)|log ?in to (view|access|open)|inicia(r)? sesi[oó]n para (ver|acceder|abrir)|connectez-vous pour (voir|acc[eé]der)|fa[cç]a login para (ver|acessar)|melden sie sich an,? um|accedi per (visualizzare|vedere)|log in om (te bekijken|te openen)/i, "Sign in to view"],
@@ -181,8 +182,27 @@
     dating: /\b(dating|singles?|lonely|hot (girls|women)|meet (?:(?:beautiful|single|ukrainian|russian|asian|latin|lonely|hot|sexy) )*(girls|women|ladies)|date tonight|romance|citas|solteras?|ligar|rencontres?|c[eé]libataires?|namoro|solteiras?|partnersuche|single(b[oö]rse|s)|incontri|appuntamenti|charmdate|sexy)\b/i,
     attachmentMention: /\b(attached|attachment|see (the )?attach|find (the )?enclosed|enclosed (please )?find|adjunto|archivo adjunto|ver adjunto|pi[eè]ce jointe|ci-joint|em anexo|segue anexo|anexo|im anhang|anbei|in allegato|allegato|in de bijlage|bijgevoegd)\b/i,
     forwardedBlock: /-{2,}\s*(forwarded message|original message|mensaje (original|reenviado)|message (d'origine|transf[eé]r[eé])|mensagem (original|encaminhada)|weitergeleitete nachricht|urspr[uü]ngliche nachricht|messaggio (originale|inoltrato)|doorgestuurd bericht|oorspronkelijk bericht)\s*-{2,}|^(from|de|von|da|van):.*\n(sent|enviado|date|fecha|envoy[eé]|gesendet|inviato|verzonden|data|datum):/im,
-    reportNarrative: /\b(customer|client(e)?|cliente|kunde|klant) (received|got|recibi[oó]|recibió|a re[cç]u|recebeu|erhielt|ha ricevuto|ontving) (a |una |un |um |uma |einen |eine |een )?(call|llamada|appel|liga[cç][aã]o|anruf|chiamata|telefoontje|email|correo|e-?mail)|reporting (a |this )?(fraud|incident|case)|reportar (un |este )?(fraude|incidente|caso)|signaler (une |cette )?(fraude|incident)|reportar (uma |esta )?(fraude)|melden (einen )?(betrug|vorfall)|segnalare (una )?(frode|truffa)|melden van (een )?(fraude|incident)|fue (estafad|defraudad)|was (scammed|defrauded)/i,
+    reportNarrative: /\b(customer|client(e)?|cliente|kunde|klant|member|cx) (received|got|recibi[oó]|recibió|a re[cç]u|recebeu|erhielt|ha ricevuto|ontving) (a |an |una |un |um |uma |einen |eine |een )?(phone |text )?(call|llamada|appel|liga[cç][aã]o|anruf|chiamata|telefoontje|sms|text message|email|correo|e-?mail)|reporting (a |this )?(fraud|incident|case)|reportar (un |este )?(fraude|incidente|caso)|signaler (une |cette )?(fraude|incident)|reportar (uma |esta )?(fraude)|melden (einen )?(betrug|vorfall)|segnalare (una )?(frode|truffa)|melden van (een )?(fraude|incident)|fue (estafad|defraudad)|was (scammed|defrauded)|\bcall(ed)? (was )?received\b|\b(received|got) a (phone )?call\b|\bcall from \+?\(?\d|\btold (the )?(cx|customer|client|member)\b|\b(cx|customer|client|member) (did ?n[o']t|didn’t|never) (confirm|give|share|provide|click)|\bfraudster|\bscammer|\bbrought (this|it) to my attention|\bforward (this|it) to (fraud|security)|appel (re[çc]u|frauduleux)|a re[çc]u un appel|llamada (recibida|fraudulenta)|recibi[óo] una llamada/i,
+    // A forwarded message that is itself someone reporting what they received.
+    reportSubject: /\b(possible|potential|suspected|suspicious|probable)\s+(spam|scam|fraud|phish(ing)?)\b|\bis this (legit(imate)?|real|you|a scam|phishing)\b|\b(spam|scam|fraud|phishing) (at|from|using|claiming|pretending)\b|\bposible (fraude|estafa|spam)|\b(fraude|arnaque|hame[çc]onnage) possible/i,
+    // Bank details that make forwarded payment instructions (counted per distinct term).
+    paymentDetails: /\b(swift(\/bic)?|bic|iban|aba|routing number|account number|n[uú]mero de cuenta|datos bancarios|coordonn[eé]es bancaires|bank(ing)? details|wire transfer|transferencia internacional|international wire|mt103|beneficiary bank|banco beneficiario|banco intermediario|intermediary bank|interac|e-?transfer|virement)\b/gi,
+    // The email gives the password of its attachment.
+    passwordHint: /(password|passcode|pass code|mot de passe|contrase[ñn]a|clave|senha|passwort|kennwort|wachtwoord|code)\b[^.\n]{0,80}|(e-?mail|courriel|correo)[^.\n]{0,60}(password|mot de passe|contrase[ñn]a|senha)/i,
+    // Call to action written in a lure PDF.
+    fileCta: /\b(view|open|access|review|download|read|sign( in)?|log ?in|click|check|verify|confirm)\b[^\n]{0,40}\b(message|document|file|invoice|payment|status|bid|proposal|statement|request|account|here|now|securely)\b|\b(view|open|download) (bid|status|document|file|pdf|message|invoice)\b|\bclick (here|to read)\b|\b(ver|abrir|descargar|consulter|ouvrir|t[eé]l[eé]charger|afficher) (el |le |la |o )?(documento|document|archivo|fichier|mensaje|message)\b/i,
   };
+
+  // External-mail banners and gateway notices (one line each), stripped before word
+  // counts, language detection and phrase matching.
+  const BANNER = /(you don.?t often get (e-?mail|messages) from|vous n.?obtenez pas souvent|no suele recibir correos|learn why this is important|pourquoi c.?est important|por qu[eé] esto es importante|originated (from )?outside (of )?(your|the|this)\b|from an? (external|outside) source|source outside of|externe?\/external|external\/externe|courriel externe|ce courriel provient de l.?externe|provient d.?une source externe|correo externo|external (e-?mail|mail|sender)\b.{0,40}(caution|click|link|attachment|trust|warning|vigilant)|(caution|warning|attention|prudence)\b.{0,60}external|do not click (on )?links|ne cliquez pas|think before clicking|be cautious when (opening|clicking)|unless you recognize the sender|report (it )?using the [“"]?report|report phish button|security advisory: this email|do not disclose any confidential|ne divulguez aucune|soyez vigilant|be vigilant, develop|n.?ouvrez pas de pi[eè]ces jointes)/i;
+  // Legal footers ("This e-mail ... is confidential ... if received in error").
+  const DISCLAIMER = /(confidential|privileged|confidentiel|confidencial)\b.{0,300}(intended (solely )?(for|recipient)|received (it |this )?(e-?mail |message )?(in|by) error|re[cç]u par erreur|recibido por error|unauthori[sz]ed (use|copying|disclosure))|stop receiving commercial electronic messages|se d[eé]sabonner des messages [eé]lectroniques|consider the environment before printing/i;
+
+  // Lines where a phone number is a signature or contact detail, not a call to action.
+  const PHONE_SIGNATURE = /(^|\s)(t|tel|t[eé]l[eé]?|telec|phone|ph|m|mob|mobile|cell#?|c|f|fax|t[eé]l[eé]copieur|ext|poste|direct|office|o|main)\s*[.:#]|\bext\.?\s*\d|\bfax\b|\bposte\s*\d/i;
+  // Words that turn a nearby phone number into the lure's callback number.
+  const PHONE_CTA = /\b(call|calling|toll[\s-]?free|dial|helpline|hotline|customer (service|care|support)|support (team|line|desk)|billing (team|department|support)|reach (us|our)|contact (us|our)|llam(e|a|ar|enos)|appel(ez|er)|ligue|anrufen|rufen sie|chiama|bel ons)\b/i;
 
   // Attachment types worth a static look for Docuphish (SEA p. 15).
   const DOC_ATTACHMENT = /\.(html?|shtml|xhtml|svg|pdf|htm|mht|mhtml|txt|eml|zip|rar|7z|iso|img|one|docm|xlsm|pptm)$/i;
@@ -190,6 +210,6 @@
 
   return {
     ROUTES, FREEMAIL, MULTI_LEVEL_SUFFIXES, BRANDS, DEFENSIVE_HOSTS, SHORTENERS, FREE_HOSTING, ESP_TRACKING, UNSUBSCRIBE,
-    EXEC_TITLES, PHRASES, DOC_ATTACHMENT, HTML_ATTACHMENT,
+    EXEC_TITLES, PHRASES, DOC_ATTACHMENT, HTML_ATTACHMENT, BANNER, DISCLAIMER, PHONE_SIGNATURE, PHONE_CTA,
   };
 });

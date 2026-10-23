@@ -7,6 +7,9 @@
   var MAX_IMAGE = 2500000;
   var MAX_HTML = 400000;
   var MAX_RAW = 8000000;
+  // PDF attachments kept (as binary strings) for the static PDF scan in signals.js.
+  var MAX_FILE = 12000000;
+  var MAX_FILES = 5;
 
   function isRfc822(name, contentType) {
     var n = (name || "").toLowerCase();
@@ -105,13 +108,40 @@
     }
     parts.push(cur);
     out.value = (parts[0] || "").trim().toLowerCase();
+    // RFC 2231: name*=charset''value and continuations name*0, name*1*… are joined.
+    var pieces = {};
     for (var j = 1; j < parts.length; j++) {
       var p = parts[j];
       var eq = p.indexOf("=");
       if (eq < 0) continue;
       var k = p.slice(0, eq).trim().toLowerCase();
       var v = p.slice(eq + 1).trim().replace(/^"/, "").replace(/"$/, "");
+      var ext = k.match(/^([^*]+)\*(?:(\d+)\*?)?$/);
+      if (ext) {
+        (pieces[ext[1]] = pieces[ext[1]] || []).push({ n: ext[2] ? +ext[2] : 0, v: v, enc: /\*$/.test(k) });
+        continue;
+      }
       out.params[k] = v;
+    }
+    for (var name in pieces) {
+      var list = pieces[name].sort(function (a, b) { return a.n - b.n; });
+      var charset = "";
+      var joined = "";
+      for (var i = 0; i < list.length; i++) {
+        var val = list[i].v;
+        if (list[i].enc) {
+          if (i === 0) {
+            var cm = val.match(/^([^']*)'[^']*'(.*)$/);
+            if (cm) {
+              charset = cm[1];
+              val = cm[2];
+            }
+          }
+          val = val.replace(/%([0-9a-f]{2})/gi, function (_, hx) { return String.fromCharCode(parseInt(hx, 16)); });
+        }
+        joined += val;
+      }
+      if (!out.params[name]) out.params[name] = charset ? decodeText(joined, charset) : joined;
     }
     return out;
   }
@@ -194,7 +224,7 @@
   }
 
   function emptyMsg() {
-    return { subject: "", from: "", headers: {}, html: "", text: "", images: [], attachments: [], nested: [] };
+    return { subject: "", from: "", headers: {}, html: "", text: "", images: [], attachments: [], files: [], nested: [] };
   }
 
   // Headers the "Indicios" panel looks at (signals.js).
@@ -242,7 +272,13 @@
       }
       var ct = ent.contentType || "";
       var disp = (ent.headers && ent.headers["content-disposition"]) || "";
-      if (ent.name || /^attachment/i.test(disp)) msg.attachments.push({ name: decodeWord(ent.name || ""), contentType: ct });
+      if (ent.name || /^attachment/i.test(disp)) {
+        var attName = decodeWord(ent.name || "");
+        msg.attachments.push({ name: attName, contentType: ct, size: ent.bytes ? ent.bytes.length : 0 });
+        if ((ct === "application/pdf" || /\.pdf$/i.test(attName)) && ent.bytes && ent.bytes.length <= MAX_FILE && msg.files.length < MAX_FILES) {
+          msg.files.push({ name: attName, contentType: ct, size: ent.bytes.length, bytes: ent.bytes });
+        }
+      }
       if (/^attachment/i.test(disp) && ct.indexOf("image/") !== 0) return;
       if (ct.indexOf("text/html") === 0) {
         if (!msg.html) msg.html = decodeText(ent.bytes, ent.charset).slice(0, MAX_HTML);
@@ -277,6 +313,7 @@
         images: m.images || [],
         headers: m.headers || {},
         attachments: m.attachments || [],
+        files: m.files || [],
         hasNestedEml: !!(m.nested && m.nested.length),
       });
       if (m.nested) {

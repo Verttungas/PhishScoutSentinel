@@ -1069,7 +1069,7 @@
       seg.setAttribute("role", "group");
       seg.setAttribute("aria-label", "Message analysed");
       layersData.forEach(function (l, i) {
-        const b = el("button", "ov-layer", l.layer === "outer" ? "Opened message" : "Attached email" + (layersData.length > 2 ? " " + i : ""));
+        const b = el("button", "ov-layer", l.short || (l.layer === "outer" ? "Opened message" : "Attached email" + (layersData.length > 2 ? " " + i : "")));
         b.type = "button";
         b.title = l.label || "";
         b.setAttribute("aria-pressed", i === selectedLayer ? "true" : "false");
@@ -1214,6 +1214,7 @@
         const left = el("div");
         if (l.text && l.text !== l.url && l.text !== l.href) left.appendChild(el("span", "link-text", l.text));
         left.appendChild(valueButton(l.url, "URL"));
+        if (l.dest) left.appendChild(el("span", "item-sub", "Redirects to " + l.dest));
         const flags = el("div", "flags");
         if (l.layers.length) flags.appendChild(el("span", "flag info", "Unwrapped: " + l.layers.join(", ")));
         for (const f of l.flags) flags.appendChild(el("span", "flag", f));
@@ -1254,11 +1255,13 @@
       box.appendChild(g.node);
     }
     if ((inv.attachments || []).length) {
-      const g = group("Attachments", inv.attachments.length, false);
+      const g = group("Attachments", inv.attachments.length, inv.attachments.some(function (a) { return a.info; }));
       for (const a of inv.attachments) {
         const li = el("li", "item");
         li.appendChild(el("span", "item-label", a.name));
         if (a.type) li.appendChild(el("span", "item-sub", a.type));
+        if (a.info) li.appendChild(el("span", "item-sub", a.info));
+        if (a.sha256) li.appendChild(valueButton(a.sha256, "SHA-256"));
         g.list.appendChild(li);
       }
       box.appendChild(g.node);

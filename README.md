@@ -4,7 +4,7 @@ Thunderbird add-on that removes email-security URL wrappers (every known layer) 
 
 A normal click opens the destination URL in your browser. The stored `.eml` is not changed. PeelScout does not need internet to run (the optional domain-age lookup — RDAP, then whois.com — is the only network use, and it is off by default).
 
-Not in this version: QR inside PDF attachments, phone OCR on images, Outlook `.msg` attachments. Translator is not included.
+Not in this version: QR inside PDF attachments, OCR of images (an image-only lure is flagged, not read), Outlook `.msg` attachments. Translator is not included.
 
 ## Install in Thunderbird
 
@@ -23,6 +23,18 @@ Release builds are not signed yet. If Thunderbird says the add-on could not be v
 Debug Add-ons → **Load Temporary Add-on…** → `manifest.json` from a source checkout. Unloads when Thunderbird restarts.
 
 Requires Thunderbird 128+.
+
+## 1.9.0
+
+- New: reports forwarded **in the body** to a reporting mailbox (`phishing@`, `abuse@`, `protection-phishing@`…) are split into the report and the **Forwarded original**, rebuilt from the Outlook / Gmail / Apple header block (EN, FR, ES, PT, DE, IT, NL) with only its own links; the sidebar opens on the original. Nothing in the report wrapper is offered as a candidate. A narrative report with no forwarded email (a call, an SMS, a customer's report) points to FIR → Internal Communication; payment instructions forwarded without headers point to FIR → Missing Headers
+- New: **PDF attachments are read statically** (`pdfscan.js`): text (including Chrome/Skia "Save as PDF" lures through their ToUnicode maps), link targets, JavaScript / launch / embedded-file features, headless-browser producer. RC4-encrypted PDFs are opened when the email itself gives the password (e.g. "your email address is the password"); AES ones are reported as encrypted. The lure link and the file (with SHA-256) become candidates; callback numbers inside the PDF count for Vishing
+- New: a message with no text of its own and a large image/PDF is flagged ("the content is in the attachment"); freemail + empty body + one randomly named image/PDF is flagged as the callback-scam pattern
+- New: external-mail banners and legal footers are ignored for word counts, language and phrases
+- New: obfuscation signals — Unicode math letters (𝗕𝗼𝗹𝗱), accents scattered over every word, words mixing Latin with Cyrillic/Greek lookalikes; phrase rules see the folded text
+- New: redirect hops after the security wrappers are followed (`?url=`, `?redirect=`, `?liga=`, affiliate `aff_c`, paths carrying a URL) and flagged with the declared destination; Google redirects that hide their destination, email addresses in base64 inside URLs and misspelt WordPress folders are flagged
+- Fix: phone numbers become Vishing candidates only next to a call to action, not in signatures or in a quoted old thread
+- Fix: RFC 2231 attachment names (`filename*0=`) in attached messages
+- Added: `scripts/eval-samples.js` to measure the engine against a local folder of classified `.eml` samples
 
 ## 1.8.0
 
@@ -123,4 +135,12 @@ Token-only wrappers (Mimecast `protect-*`, some Sophos/VIPRE) stay as-is.
 npm test
 ```
 
-Runs the unit tests for the unwrap, nested-EML, ICS and phone parsers with Node's built-in runner (no dependencies). Leave `test/`, `scripts/` and `package.json` out when zipping the `.xpi`.
+Runs the unit tests for the unwrap, nested-EML, ICS, phone, forward and PDF parsers and the insights engine with Node's built-in runner (no dependencies). Leave `test/`, `scripts/` and `package.json` out when zipping the `.xpi`.
+
+To measure the engine against classified samples (folder names give the expected result, e.g. `Malicious/Link/O365`, `FIR`, `NTD`):
+
+```bash
+node scripts/eval-samples.js "/path/to/EML Samples" --json results.json
+```
+
+Keep the samples outside the repository: they are real customer mail.
