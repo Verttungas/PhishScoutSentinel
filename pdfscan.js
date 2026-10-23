@@ -161,7 +161,8 @@
       if (sm) {
         const dict = body.slice(0, sm.index);
         let data = body.slice(sm.index + sm[0].length);
-        const len = dict.match(/\/Length\s+(\d+)(?!\s+\d+\s+R)/);
+        // A direct length only ("/Length 19 0 R" points elsewhere: fall back to endstream).
+        const len = dict.match(/\/Length\s+(\d+)\b(?!\s+\d+\s+R)/);
         const es = data.lastIndexOf("endstream");
         if (len && +len[1] <= data.length) data = data.slice(0, +len[1]);
         else if (es >= 0) data = data.slice(0, es).replace(/\r?\n$/, "");
@@ -442,9 +443,135 @@
     return out;
   }
 
+  // --- URLs written as text ----------------------------------------------------------
+  // http(s) links, www. hosts and bare domains on common TLDs that are not part of an
+  // email address; used for PDF text and for text read from images (OCR).
+  const TEXT_URL = /(?<![@\w.-])(?:https?:\/\/[^\s<>"'()\[\]{}]+|www\.[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/[^\s<>"'()\[\]{}]*)?|[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*\.(?:com|net|org|info|biz|io|co|ca|us|uk|de|fr|es|mx|ru|cn|top|xyz|online|site|app|dev|link|live|shop|click|me)(?:\/[^\s<>"'()\[\]{}]*)?)(?![\w@-])/gi;
+  function urlsInText(text) {
+    const out = [];
+    for (let u of String(text || "").match(TEXT_URL) || []) {
+      u = u.replace(/[.,;:!?'"]+$/, "");
+      if (!/^https?:/i.test(u)) u = "https://" + u;
+      if (out.indexOf(u) < 0) out.push(u);
+    }
+    return out.slice(0, 30);
+  }
+
+  // --- Embedded images (for QR codes) ---------------------------------------------
+  function pngUnfilter(data, columns, bpp, rowLen) {
+    const rows = Math.floor(data.length / (rowLen + 1));
+    const out = new Uint8Array(rows * rowLen);
+    for (let r = 0; r < rows; r++) {
+      const type = data[r * (rowLen + 1)];
+      const src = r * (rowLen + 1) + 1;
+      const dst = r * rowLen;
+      for (let i = 0; i < rowLen; i++) {
+        const x = data[src + i];
+        const a = i >= bpp ? out[dst + i - bpp] : 0;
+        const b = r ? out[dst - rowLen + i] : 0;
+        const c = r && i >= bpp ? out[dst - rowLen + i - bpp] : 0;
+        let v = x;
+        if (type === 1) v = x + a;
+        else if (type === 2) v = x + b;
+        else if (type === 3) v = x + ((a + b) >> 1);
+        else if (type === 4) {
+          const p = a + b - c;
+          const pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+          v = x + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c);
+        }
+        out[dst + i] = v & 0xff;
+      }
+    }
+    return out;
+  }
+
+  function arrayText(objs, value) {
+    const ref = String(value || "").match(/^(\d+)\s+\d+\s+R$/);
+    return ref && objs.get(+ref[1]) ? objs.get(+ref[1]).dict : String(value || "");
+  }
+
+  // One image XObject: {kind: "jpeg", bytes} for DCT streams (the caller decodes them),
+  // or {kind: "rgba", width, height, data} for Flate/uncompressed gray, RGB, CMYK,
+  // indexed and 1/2/4-bit images.
+  function imageOf(o, objs, decrypt) {
+    const d = o.dict;
+    const w = +((d.match(/\/Width\s+(\d+)/) || [])[1] || 0);
+    const h = +((d.match(/\/Height\s+(\d+)/) || [])[1] || 0);
+    if (w < 21 || h < 21 || w * h > 2500000 || o.stream == null) return null;
+    const names = ((d.match(/\/Filter\s*(\[[^\]]*\]|\/[A-Za-z0-9]+)/) || [])[1] || "").match(/\/[A-Za-z0-9]+/g) || [];
+    if (names.length === 1 && /^\/(DCTDecode|DCT)$/.test(names[0])) {
+      return { kind: "jpeg", width: w, height: h, bytes: toBytes(decrypt ? decrypt(o, o.stream) : o.stream) };
+    }
+    if (names.length > 1 || (names.length === 1 && !/^\/(FlateDecode|Fl)$/.test(names[0]))) return null;
+    const mask = /\/ImageMask\s+true/.test(d);
+    const bpc = mask ? 1 : +((d.match(/\/BitsPerComponent\s+(\d+)/) || [])[1] || 8);
+    let cs = mask ? "/DeviceGray" : arrayText(objs, (d.match(/\/ColorSpace\s*(\/[A-Za-z0-9]+|\[[^\]]*\]|\d+\s+\d+\s+R)/) || [])[1] || "/DeviceGray");
+    let palette = null;
+    let base = cs;
+    if (/\/Indexed|\/I\b/.test(cs)) {
+      const lookupHex = cs.match(/<([0-9a-fA-F\s]+)>/);
+      const lookupRef = cs.match(/(\d+)\s+(\d+)\s+R\s*\]?\s*$/);
+      if (lookupHex) palette = toBytes(readHex(lookupHex[1]));
+      else if (lookupRef && objs.get(+lookupRef[1])) {
+        const lk = decodeStream(objs.get(+lookupRef[1]), decrypt);
+        if (lk) palette = toBytes(lk);
+      } else {
+        const lit = cs.indexOf("(");
+        if (lit >= 0) palette = toBytes(readLiteral(cs, lit).bin);
+      }
+      base = cs.replace(/\/Indexed|\/I\b/, "");
+    }
+    const iccRef = base.match(/\/ICCBased\s+(\d+)\s+\d+\s+R/);
+    let comps = /RGB/.test(base) ? 3 : /CMYK/.test(base) ? 4 : 1;
+    if (iccRef && objs.get(+iccRef[1])) comps = +((objs.get(+iccRef[1]).dict.match(/\/N\s+(\d)/) || [])[1] || comps);
+    const paletteComps = comps;
+    if (palette) comps = 1;
+    const raw = decodeStream(o, decrypt);
+    if (!raw) return null;
+    let bytes = toBytes(raw);
+    const rowLen = Math.ceil((w * comps * bpc) / 8);
+    const parms = (d.match(/\/DecodeParms\s*<<([\s\S]*?)>>/) || [])[1] || "";
+    if (+((parms.match(/\/Predictor\s+(\d+)/) || [])[1] || 1) >= 10) bytes = pngUnfilter(bytes, w, Math.max(1, (comps * bpc) >> 3), rowLen);
+    if (bytes.length < rowLen * h) return null;
+    const invert = /\/Decode\s*\[\s*1(\.0*)?\s+0/.test(d);
+    const out = new Uint8ClampedArray(w * h * 4);
+    const max = (1 << bpc) - 1;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        let r, g, b;
+        if (bpc === 8) {
+          const i = y * rowLen + x * comps;
+          if (palette) {
+            const p = bytes[i] * paletteComps;
+            r = palette[p]; g = paletteComps >= 3 ? palette[p + 1] : r; b = paletteComps >= 3 ? palette[p + 2] : r;
+          } else if (comps >= 4) {
+            const k = bytes[i + 3];
+            r = 255 - Math.min(255, bytes[i] + k); g = 255 - Math.min(255, bytes[i + 1] + k); b = 255 - Math.min(255, bytes[i + 2] + k);
+          } else if (comps === 3) {
+            r = bytes[i]; g = bytes[i + 1]; b = bytes[i + 2];
+          } else r = g = b = bytes[i];
+        } else {
+          const bit = x * comps * bpc;
+          const v = (bytes[y * rowLen + (bit >> 3)] >> (8 - bpc - (bit & 7))) & max;
+          if (palette) {
+            const p = v * paletteComps;
+            r = palette[p]; g = paletteComps >= 3 ? palette[p + 1] : r; b = paletteComps >= 3 ? palette[p + 2] : r;
+          } else r = g = b = Math.round((v * 255) / max);
+        }
+        if (invert) { r = 255 - r; g = 255 - g; b = 255 - b; }
+        const o4 = (y * w + x) * 4;
+        out[o4] = r; out[o4 + 1] = g; out[o4 + 2] = b; out[o4 + 3] = 255;
+      }
+    }
+    return { kind: "rgba", width: w, height: h, data: out };
+  }
+
   // --- Scan --------------------------------------------------------------------------
   /**
    * bytes: Uint8Array of the file. opts.passwords: candidate user passwords.
+   * opts.images: also return embedded images; opts.qr: a jsQR-style decoder
+   * (data, width, height, options) used on the raw ones (res.qr). JPEG images are
+   * returned in res.jpegs for the caller to decode.
    * Returns { ok, pages, encrypted, algorithm, decrypted, password, uris, text,
    *           features, producer, creator, title, images, error }
    */
@@ -507,6 +634,30 @@
         }
         res.text = text.replace(/[ \t]+/g, " ").replace(/ *\n[\s\n]*/g, "\n").trim().slice(0, MAX_TEXT);
       }
+      res.textUris = urlsInText(res.text).filter(function (u) { return res.uris.indexOf(u) < 0; });
+      if (readable && opts && opts.images) {
+        // Alpha masks are images too, but never the QR code itself.
+        const masks = {};
+        for (const o of objs.values()) {
+          const m = o.dict.match(/\/SMask\s+(\d+)\s+\d+\s+R/);
+          if (m) masks[m[1]] = true;
+        }
+        res.qr = [];
+        res.jpegs = [];
+        let n = 0;
+        for (const o of objs.values()) {
+          if (n >= 8 || masks[o.num] || !/\/Subtype\s*\/Image\b/.test(o.dict)) continue;
+          let img = null;
+          try { img = imageOf(o, objs, decrypt); } catch (_) {}
+          if (!img) continue;
+          n++;
+          if (img.kind === "jpeg") res.jpegs.push(img.bytes);
+          else if (opts.qr) {
+            const hit = opts.qr(img.data, img.width, img.height, { inversionAttempts: "attemptBoth" });
+            if (hit && hit.data && res.qr.indexOf(hit.data) < 0) res.qr.push(hit.data);
+          }
+        }
+      }
       res.ok = true;
     } catch (e) {
       res.error = String((e && e.message) || e);
@@ -532,5 +683,5 @@
     return /application\/(pdf|x-pdf)/i.test(contentType || "") || /\.pdf$/i.test(name || "");
   }
 
-  return { scan, passwordHints, isPdf, md5, rc4 };
+  return { scan, passwordHints, isPdf, urlsInText, md5, rc4 };
 });

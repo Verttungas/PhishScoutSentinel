@@ -335,19 +335,114 @@ async function teamSettings() {
   }
 }
 
+// --- QR codes (jsQR) for the insights ---------------------------------------------
+// Images of the message and of attached messages, and JPEG images inside PDFs, are
+// decoded here so the links they hold go through the same checks as the email's links.
+const QR_MAX_IMAGES = 12;
+const QR_MAX_BYTES = 5 * 1024 * 1024;
+const QR_MAX_SIDE = 1000;
+const qrCache = new Map();
+
+async function qrFromBlob(blob) {
+  try {
+    const bmp = await createImageBitmap(blob);
+    const scale = Math.min(1, QR_MAX_SIDE / Math.max(bmp.width, bmp.height));
+    const w = Math.max(1, Math.round(bmp.width * scale));
+    const h = Math.max(1, Math.round(bmp.height * scale));
+    if (w < 21 || h < 21) return null;
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    // A QR drawn on a transparent background reads as black on white.
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(bmp, 0, 0, w, h);
+    if (bmp.close) bmp.close();
+    const hit = jsQR(ctx.getImageData(0, 0, w, h).data, w, h, { inversionAttempts: "attemptBoth" });
+    return hit && hit.data ? hit.data : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// QR codes in the displayed message's images (inline = in the body) and in the images
+// of attached messages, as files the engine reads. Cached per message.
+async function qrFiles(messageId, nested) {
+  if (qrCache.has(messageId)) return qrCache.get(messageId);
+  const result = { outer: [], nested: [] };
+  try {
+    const full = await messenger.messages.getFull(messageId);
+    const parts = [];
+    walkParts(full, parts);
+    let n = 0;
+    for (const part of parts) {
+      if (n >= QR_MAX_IMAGES || part === full || !part.partName) continue;
+      const mime = imageMime(part.name || part.filename, part.contentType);
+      if (!mime || mime === "image/svg+xml" || mime === "image/x-icon" || (part.size && part.size > QR_MAX_BYTES)) continue;
+      n++;
+      try {
+        const file = await messenger.messages.getAttachmentFile(messageId, part.partName);
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const payload = await qrFromBlob(new Blob([bytes], { type: mime }));
+        if (!payload) continue;
+        const inline = !!headerValue(part, "content-id") && headerValue(part, "content-disposition").indexOf("attachment") !== 0;
+        result.outer.push(PeelSignals.qrFile(part.name || part.filename || "image", payload, inline ? "body" : "attachment", await sha256Hex(bytes)));
+      } catch (_) {}
+    }
+  } catch (_) {}
+  for (let i = 0; i < nested.length; i++) {
+    result.nested[i] = [];
+    for (const img of (nested[i].images || []).slice(0, QR_MAX_IMAGES)) {
+      try {
+        const payload = await qrFromBlob(await (await fetch(img.dataUrl)).blob());
+        if (payload) result.nested[i].push(PeelSignals.qrFile(img.name || "image", payload, img.inline ? "body" : "attachment", ""));
+      } catch (_) {}
+    }
+  }
+  qrCache.set(messageId, result);
+  while (qrCache.size > 50) qrCache.delete(qrCache.keys().next().value);
+  return result;
+}
+
+// PDF attachments scanned once here, so the JPEG images inside them can be decoded for
+// QR codes (raw images are decoded during the scan itself).
+async function scanPdfs(msg) {
+  const files = PeelSignals.scanFiles(msg, PeelSignals.addressesIn((msg.headers || {}).to));
+  for (const f of files) {
+    const sc = f.scan;
+    if (!sc || !sc.jpegs) continue;
+    for (const bytes of sc.jpegs) {
+      const payload = await qrFromBlob(new Blob([bytes], { type: "image/jpeg" }));
+      if (payload && sc.qr.indexOf(payload) < 0) sc.qr.push(payload);
+    }
+    delete sc.jpegs;
+  }
+  return files;
+}
+
 // Layers for the sidebar: the opened message (or, for a report with the original
 // forwarded in its body, the report and the rebuilt original) and attached messages.
-async function analyzeLayers(outer, nested, icsUrls) {
+async function analyzeLayers(outer, nested, icsUrls, messageId) {
   try {
+    const qr = messageId != null ? await qrFiles(messageId, nested) : { outer: [], nested: [] };
     const withHashes = [];
-    for (const m of nested) {
+    for (let i = 0; i < nested.length; i++) {
+      const m = nested[i];
       const files = [];
       for (const f of m.files || []) {
+        if (!f.bytes) {
+          files.push(f);
+          continue;
+        }
         const bytes = binaryToBytes(f.bytes);
         files.push({ name: f.name, contentType: f.contentType, size: f.size, bytes, sha256: await sha256Hex(bytes) });
       }
-      withHashes.push(Object.assign({}, m, { files }));
+      const n = Object.assign({}, m, { files });
+      n.files = (await scanPdfs(n)).concat(qr.nested[i] || []);
+      withHashes.push(n);
     }
+    outer.files = (await scanPdfs(outer)).concat(qr.outer);
     return PeelSignals.analyzeAll(outer, withHashes, icsUrls, await teamSettings());
   } catch (_) {
     return [];
@@ -483,7 +578,7 @@ async function pushSignals(tabId, messageId, nested, urls) {
     outer.files = outer.files.concat(ocr.outer);
     nested = nested.map((m, i) => Object.assign({}, m, { files: (m.files || []).concat(ocr.nested[i] || []) }));
   }
-  const layers = await analyzeLayers(outer, nested, urls);
+  const layers = await analyzeLayers(outer, nested, urls, messageId);
   const ocrInfo = { images: await countOcrImages(messageId, nested), state: ocrRunning.has(messageId) ? "running" : ocr ? "done" : "idle" };
   const rdap = await rdapEnabled();
   let state = rdap ? "pending" : "off";

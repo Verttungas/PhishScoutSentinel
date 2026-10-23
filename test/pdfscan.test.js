@@ -103,3 +103,91 @@ test("Not a PDF / garbage is reported, never thrown", () => {
   assert.strictEqual(P.scan(bytesOf("hello")).error, "not a PDF");
   assert.strictEqual(P.scan(bytesOf("%PDF-1.4\n1 0 obj << /Length 9 /Filter /FlateDecode >>\nstream\nxx\nendobj")).ok, true);
 });
+
+// --- Written URLs and embedded images (QR codes) -----------------------------------
+
+const jsQR = require("../jsqr.min.js");
+const QR_URL = "https://qr-lure.example/scan?id=7";
+// Module matrix of a QR code for QR_URL (generated once with CoreImage; synthetic URL).
+const MATRIX = require("node:fs").readFileSync(require("node:path").join(__dirname, "fixtures", "qr-matrix.txt"), "utf8").trim().split("\n");
+
+// Grey pixels of the QR code: 4 px per module and a 4-module quiet zone.
+function qrPixels() {
+  const n = MATRIX.length, s = 4, q = 4, w = (n + 2 * q) * s;
+  const px = new Uint8Array(w * w).fill(255);
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    if (MATRIX[y][x] !== "1") continue;
+    for (let dy = 0; dy < s; dy++) for (let dx = 0; dx < s; dx++) px[((y + q) * s + dy) * w + (x + q) * s + dx] = 0;
+  }
+  return { w, px };
+}
+
+// A PDF whose page shows one image XObject (and optional text).
+function imagePdf(opts) {
+  const { w, px } = qrPixels();
+  let data, extra = "";
+  if (opts.kind === "jpeg") {
+    data = bin(Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4, 0xff, 0xd9]));
+    extra = "/Filter /DCTDecode /BitsPerComponent 8 /ColorSpace /DeviceRGB";
+  } else if (opts.kind === "1bit") {
+    const rowLen = Math.ceil(w / 8);
+    const packed = Buffer.alloc(rowLen * w);
+    for (let y = 0; y < w; y++) for (let x = 0; x < w; x++) if (px[y * w + x]) packed[y * rowLen + (x >> 3)] |= 0x80 >> (x & 7);
+    data = bin(zlib.deflateSync(packed));
+    extra = "/Filter /FlateDecode /BitsPerComponent 1 /ColorSpace /DeviceGray";
+  } else if (opts.kind === "predictor") {
+    const rows = [];
+    for (let y = 0; y < w; y++) {
+      const row = Buffer.alloc(w + 1);
+      row[0] = 2; // PNG "Up"
+      for (let x = 0; x < w; x++) row[x + 1] = (px[y * w + x] - (y ? px[(y - 1) * w + x] : 0)) & 0xff;
+      rows.push(row);
+    }
+    data = bin(zlib.deflateSync(Buffer.concat(rows)));
+    extra = "/Filter /FlateDecode /BitsPerComponent 8 /ColorSpace /DeviceGray /DecodeParms << /Predictor 15 /Colors 1 /Columns " + w + " >>";
+  } else {
+    data = bin(zlib.deflateSync(Buffer.from(px)));
+    extra = "/Filter /FlateDecode /BitsPerComponent 8 /ColorSpace /DeviceGray";
+  }
+  const text = opts.text ? "BT /F1 12 Tf 1 0 0 1 40 40 Tm (" + opts.text + ") Tj ET" : "";
+  const content = bin(zlib.deflateSync(Buffer.from("q 200 0 0 200 50 300 cm /Im1 Do Q " + text)));
+  const objs = [];
+  objs[1] = "<< /Type /Catalog /Pages 2 0 R >>";
+  objs[2] = "<< /Type /Pages /Kids [3 0 R] /Count 1 >>";
+  objs[3] = "<< /Type /Page /Parent 2 0 R /Resources << /XObject << /Im1 5 0 R >> /Font << /F1 6 0 R >> >> /Contents 4 0 R >>";
+  objs[4] = "<< /Filter /FlateDecode /Length " + content.length + " >>\nstream\n" + content + "\nendstream";
+  objs[5] = "<< /Type /XObject /Subtype /Image /Width " + w + " /Height " + w + " " + extra + " /Length " + data.length + " >>\nstream\n" + data + "\nendstream";
+  objs[6] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>";
+  let out = "%PDF-1.4\n";
+  for (let i = 1; i < objs.length; i++) out += i + " 0 obj\n" + objs[i] + "\nendobj\n";
+  return bytesOf(out + "trailer\n<< /Root 1 0 R >>\n%%EOF\n");
+}
+
+test("the QR fixture decodes to its URL", () => {
+  const { w, px } = qrPixels();
+  const rgba = new Uint8ClampedArray(w * w * 4);
+  for (let i = 0; i < px.length; i++) rgba.set([px[i], px[i], px[i], 255], i * 4);
+  assert.strictEqual(jsQR(rgba, w, w).data, QR_URL);
+});
+
+test("QR codes in images embedded in a PDF are decoded (8-bit, PNG predictor, 1-bit)", () => {
+  for (const kind of ["gray", "predictor", "1bit"]) {
+    const r = P.scan(imagePdf({ kind }), { images: true, qr: jsQR });
+    assert.ok(r.ok, kind + ": " + r.error);
+    assert.deepStrictEqual(r.qr, [QR_URL], kind);
+  }
+});
+
+test("JPEG images are handed back for the caller to decode; no images without opts.images", () => {
+  const r = P.scan(imagePdf({ kind: "jpeg" }), { images: true, qr: jsQR });
+  assert.strictEqual(r.jpegs.length, 1);
+  assert.strictEqual(r.jpegs[0][0], 0xff);
+  const quiet = P.scan(imagePdf({ kind: "gray" }));
+  assert.strictEqual(quiet.qr, undefined);
+});
+
+test("URLs written in the PDF text are listed apart from its links; email domains are not URLs", () => {
+  const r = P.scan(imagePdf({ kind: "gray", text: "Copy www.portal-docs.example/view into your browser. Contact ana@firm.example" }));
+  assert.deepStrictEqual(r.textUris, ["https://www.portal-docs.example/view"]);
+  assert.deepStrictEqual(P.urlsInText("see invoice.pdf, http://a.example/x. and mail bob@corp.example"), ["http://a.example/x"]);
+});

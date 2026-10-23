@@ -143,6 +143,7 @@
   // Each entry: [regex, label shown in the panel].
   const PHRASES = {
     o365: [
+      [/\b(enter|use|type|confirm) (your )?(work |corporate |company |office |e-?mail |microsoft |outlook )?(credentials|password|login details)|scan(ning)? the qr code\b.{0,80}\b(sign in|log ?in|credentials|password|verify)|(sign in|log ?in|credentials|password|verify)\b.{0,80}\bscan(ning)? the qr code/i, "Asks for credentials / QR sign-in"],
       [/held (incoming )?(messages|e-?mails)|messages? (on hold|held for you)|storage (space )?(is )?(full|running low|almost full)|manage storage|mailbox (storage )?(is )?(full|almost full)|e-?mails? (are|were) (on hold|pending delivery)/i, "Mailbox storage / held messages"],
       [/(pending|upcoming|outstanding) tasks?|tasks? (pending|awaiting) (your )?(approval|action)|action required:|requires your (approval|action)|payroll run.{0,40}(not (yet )?approved|approval)/i, "Pending tasks / action required"],
       [/\btender (documents?|submission|invitation)|bid submission|request for (tender|proposal)|\bRFP\b|invitation to (tender|bid)|solicitation and bid/i, "Tender / bid documents"],

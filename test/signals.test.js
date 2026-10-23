@@ -477,3 +477,55 @@ test("Hypotheses: DNE with suspicious signs and no route; NTD when nothing is of
   const strong = S.analyze({ layer: "nested", headers: { from: "x@gmail.com", to: "y@z.example", received: "x" }, text: "Main #cell to reach you?" });
   assert.ok(!strong.routes.some((r) => r.key === "dne" || r.key === "ntd"));
 });
+
+// --- QR codes and written URLs ------------------------------------------------------
+
+const pdfScan = (extra) => Object.assign({ ok: true, pages: 1, encrypted: false, uris: [], textUris: [], qr: [], text: "", features: [], producer: "", creator: "", title: "", images: 1 }, extra);
+
+test("QR code in the body: its link is an action link even on the sender's domain, and points to O365 with a sign-in lure", () => {
+  const res = S.analyze({
+    layer: "nested",
+    headers: { from: "IT Desk <it@helpdesk-portal.example>", to: "me@corp.example", subject: "Security alert", received: "x" },
+    html: '<p>Install the new antivirus: enter your work credentials after scanning the QR code below.</p><img src="cid:qr1">',
+    attachments: [{ name: "qr.png", contentType: "image/png", size: 900 }],
+    files: [S.qrFile("qr.png", "https://scan.helpdesk-portal.example/i/abc", "body")],
+  });
+  assert.strictEqual(res.routes[0].key, "o365");
+  assert.ok(res.general.some((s) => /Link from a QR code in the body/.test(s.label) && s.strength === "strong"));
+  assert.ok(res.iocs.some((i) => i.value === "https://scan.helpdesk-portal.example/i/abc"));
+  assert.ok(res.inventory.links.some((l) => l.flags.some((f) => /QR in the body/.test(f))));
+});
+
+test("QR code in an attached image → Docuphish with the image and the QR's URL as candidates", () => {
+  const res = S.analyze({
+    layer: "nested",
+    headers: { from: "HR <hr@x.example>", to: "me@corp.example", subject: "Benefits", received: "x" },
+    text: "See the attached flyer.",
+    attachments: [{ name: "flyer.png", contentType: "image/png", size: 80000 }],
+    files: [S.qrFile("flyer.png", "https://benefits-enroll.example/q", "attachment", "cd".repeat(32))],
+  });
+  const d = res.routes.find((r) => r.key === "docuphish");
+  assert.ok(d && d.strong);
+  assert.ok(res.iocs.some((i) => i.type === "Attachment" && /flyer\.png · SHA-256 cdcd/.test(i.value)));
+  assert.ok(res.iocs.some((i) => i.value === "https://benefits-enroll.example/q"));
+});
+
+test("QR code inside a PDF → Docuphish strong; a URL written in a PDF needs a call to action", () => {
+  const base = { layer: "nested", headers: { from: "A <a@vendor.example>", to: "me@corp.example", subject: "Remittance", received: "x" }, text: "Please review the attached.", attachments: [{ name: "doc.pdf", contentType: "application/pdf" }] };
+  const qr = S.analyze(Object.assign({}, base, { files: [{ name: "doc.pdf", scan: pdfScan({ qr: ["https://qr-lure.example/scan?id=7"], text: "Scan to view" }) }] }));
+  assert.ok(qr.routes.find((r) => r.key === "docuphish").signals.some((s) => /has a QR code/.test(s.label) && s.strength === "strong"));
+  assert.ok(qr.inventory.links.some((l) => l.flags.includes("QR in doc.pdf")));
+  const cta = S.analyze(Object.assign({}, base, { files: [{ name: "doc.pdf", scan: pdfScan({ textUris: ["https://portal-docs.example/view"], text: "To view the secure document copy https://portal-docs.example/view in your browser" }) }] }));
+  assert.ok(cta.routes.find((r) => r.key === "docuphish").strong);
+  assert.ok(cta.iocs.some((i) => i.value === "https://portal-docs.example/view"));
+  const plain = S.analyze(Object.assign({}, base, { files: [{ name: "doc.pdf", scan: pdfScan({ textUris: ["https://www.partner.example"], text: "Our partner: www.partner.example" }) }] }));
+  const d = plain.routes.find((r) => r.key === "docuphish");
+  assert.ok(!d || !d.strong);
+  assert.ok(!plain.iocs.some((i) => i.type === "URL"));
+});
+
+test("A QR code that holds text, not a link, is only noted", () => {
+  const res = S.analyze({ layer: "nested", headers: { from: "a@b.example", to: "c@d.example", received: "x" }, text: "", attachments: [{ name: "wifi.png", contentType: "image/png", size: 2000 }], files: [S.qrFile("wifi.png", "WIFI:S:Guest;T:WPA;P:pass1234;;", "attachment")] });
+  assert.ok(res.general.some((s) => /QR code in the attached image/.test(s.label)));
+  assert.ok(!res.routes.some((r) => r.key === "docuphish"));
+});
