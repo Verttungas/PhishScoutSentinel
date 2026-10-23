@@ -26,7 +26,8 @@ Requires Thunderbird 128+.
 
 ## 1.8.0
 
-- New: sidebar on the right holds all of PeelScout's output; the email is no longer modified by banners
+- New: sidebar on the right holds all of PeelScout's output; the email is no longer modified by banners. Overview with evidence meters, Evidence / Indicators / Previews tabs, light and dark appearance, keyboard navigation and one-click copy
+- New: popup shows each unwrapping step and copies the destination
 - New: Insights panel (English) — hints per possible route from the classification guide (BEC, RECON, 419, Vishing, Job, Tech Support, O365, Phishing, Docuphish, FIR), with the evidence for each, a Verify list, catalogue candidates and Copy summary in the analyst template. It never classifies
 - New: offline ports of Sublime Security rules, lists and IOCs (MIT)
 - New: phrase rules in 7 languages, language detection; optional domain-age lookup (RDAP, then whois.com)
@@ -67,9 +68,13 @@ Requires Thunderbird 128+.
 
 ## Sidebar
 
-Everything PeelScout shows sits in a panel on the right of the message, in its own shadow DOM: the email itself is not modified (only link unwrapping touches it; it gets narrower while the panel is open). Drag the left edge to resize, `›` to fold it to a thin rail (the email gets its full width back) and click the rail to bring it back. Width and folded state are remembered.
+Everything PeelScout shows sits in a panel on the right of the message, in its own shadow DOM: the email itself is not modified (only link unwrapping touches it; it gets narrower while the panel is open). It follows Thunderbird's light or dark appearance.
 
-Sections: **Insights**, image attachments, nested `.eml`, calendar-invite links and QR codes.
+- **Overview** at the top: the routes the evidence points to, each with an evidence meter (filled dot = strong insight, half dot = weak), Copy summary, the detected language and the number of Sublime rules matched. When an original is attached, a switch chooses between the attached email (shown first) and the opened message
+- **Evidence** tab: insights per route, Sublime rules, technical signals, QR codes and the domains to verify
+- **Indicators** tab: candidates to mark, flagged and action links (with the wrappers removed), addresses, phone numbers, attachments, calendar-invite links and decoded QR codes. Every value copies with one click
+- **Previews** tab: image attachments (full-size viewer) and attached emails
+- Keyboard: arrow keys move between tabs, Esc closes dialogs and the image viewer, the resize handle takes arrow keys too. Drag the left edge to resize, `›` folds the panel to a thin rail (the email gets its full width back). Width, folded state and last tab are remembered
 
 ## Insights
 
