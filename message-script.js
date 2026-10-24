@@ -871,6 +871,12 @@
       const who = document.createElement("div");
       who.className = "nest-who";
       who.textContent = "From " + (msg.from || "(unknown sender)") + (msg.filename ? ", attached as " + msg.filename : "");
+      if (msg.note) {
+        const note = document.createElement("div");
+        note.className = "nest-note";
+        note.textContent = msg.note;
+        who.appendChild(note);
+      }
       const inner = document.createElement("div");
       const hasBody = hasMeaningfulBody(msg);
       inner.className = "nest-inner" + (hasBody ? "" : " nest-tight");
@@ -908,6 +914,23 @@
         });
         media.appendChild(img);
         imgByUrl[im.dataUrl] = img;
+      }
+      // Page images of the message's PDFs (an image-only PDF is often the whole lure).
+      for (const p of msg.pdfImages || []) {
+        const fig = document.createElement("figure");
+        fig.className = "nest-pdf";
+        const img = document.createElement("img");
+        img.src = p.dataUrl;
+        img.alt = "Image in " + p.name;
+        img.className = "nest-img nest-img-photo";
+        img.addEventListener("click", function () {
+          showLightbox([{ src: p.dataUrl, name: "Image in " + p.name }], 0);
+        });
+        const cap = document.createElement("figcaption");
+        cap.textContent = "Image in " + p.name;
+        fig.appendChild(img);
+        fig.appendChild(cap);
+        media.appendChild(fig);
       }
       if (media.childElementCount) inner.appendChild(media);
       const qrBox = document.createElement("div");
@@ -1099,6 +1122,16 @@
       ov.appendChild(seg);
     }
     for (const n of res.notes || []) ov.appendChild(el("p", "callout", n));
+    if (res.outlookFile && api && api.runtime) {
+      const rebuild = el("button", "btn btn-primary", "Rebuild and open the file…");
+      rebuild.type = "button";
+      rebuild.addEventListener("click", function () {
+        api.runtime.sendMessage({ type: "open-rebuild" }).catch(function () {});
+      });
+      const row = el("div", "ov-actions ov-rebuild");
+      row.appendChild(rebuild);
+      ov.appendChild(row);
+    }
     if (ocrInfo.images && ocrInfo.state === "idle" && res.general.some(function (s) { return /^No text of its own/.test(s.label); })) {
       ov.appendChild(el("p", "callout", "The content seems to be inside an image: “Read images (OCR)” reads it on this computer and adds it to the evidence."));
     }

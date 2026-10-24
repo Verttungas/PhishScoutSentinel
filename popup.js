@@ -122,3 +122,8 @@ function saveSettings() {
 sim.addEventListener("input", saveSettings);
 org.addEventListener("input", saveSettings);
 loadSettings();
+
+document.getElementById("outlook").addEventListener("click", async () => {
+  await messenger.tabs.create({ url: messenger.runtime.getURL("rebuild.html") });
+  window.close();
+});

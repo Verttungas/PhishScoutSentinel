@@ -1,7 +1,7 @@
 (function (root, factory) {
-  if (typeof module === "object" && module.exports) module.exports = factory();
-  else root.NestedEml = factory();
-})(typeof globalThis !== "undefined" ? globalThis : this, function () {
+  if (typeof module === "object" && module.exports) module.exports = factory(require("./msg.js"));
+  else root.NestedEml = factory(root.PeelMsg);
+})(typeof globalThis !== "undefined" ? globalThis : this, function (Msg) {
   "use strict";
 
   var MAX_IMAGE = 2500000;
@@ -15,6 +15,11 @@
     var n = (name || "").toLowerCase();
     var ct = (contentType || "").toLowerCase();
     return ct.indexOf("message/rfc822") !== -1 || /\.eml$/i.test(n);
+  }
+
+  // Outlook .msg files (msg.js reads them, damaged ones included).
+  function isOutlookMsg(name, contentType) {
+    return /\.msg$/i.test(name || "") || /^application\/(vnd\.ms-outlook|x-msg)\b/i.test(contentType || "");
   }
 
   function decodeQP(str) {
@@ -203,7 +208,7 @@
     var cd = parseParams(headers["content-disposition"] || "");
     var cid = (headers["content-id"] || "").replace(/[<>]/g, "").trim();
     var name = cd.params.filename || ct.params.name || "";
-    if (depth < 3 && (ct.value === "message/rfc822" || isRfc822(name, ct.value))) {
+    if (depth < 3 && (ct.value === "message/rfc822" || isRfc822(name, ct.value) || isOutlookMsg(name, ct.value))) {
       return { kind: "rfc822", headers: headers, name: name, message: parseMessage(decodePartBody(hb.body, te), depth + 1) };
     }
     if (ct.value.indexOf("multipart/") === 0) {
@@ -233,6 +238,10 @@
   function parseMessage(raw, depth) {
     var msg = emptyMsg();
     if (!raw) return msg;
+    if (Msg && Msg.isMsg(raw)) {
+      var r = Msg.read(raw);
+      return r.ok ? r.message : Object.assign(msg, { note: "Outlook .msg file that could not be read (" + (r.error || "unknown error") + ")." });
+    }
     var entity = parseEntity(raw, depth || 0);
     if (entity.kind === "rfc822" && entity.message) return entity.message;
 
@@ -308,6 +317,7 @@
       }
       list.push({
         filename: name || "",
+        note: m.note || "",
         subject: m.subject || "",
         from: m.from || "",
         html: m.html || "",
@@ -343,5 +353,5 @@
     return s;
   }
 
-  return { isRfc822: isRfc822, parse: parse, parseMessage: parseMessage, fileToRaw: fileToRaw, decodeWord: decodeWord };
+  return { isRfc822: isRfc822, isOutlookMsg: isOutlookMsg, parse: parse, parseMessage: parseMessage, fileToRaw: fileToRaw, decodeWord: decodeWord };
 });

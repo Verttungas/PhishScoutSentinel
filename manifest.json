@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "name": "PeelScout",
   "description": "Removes email-security URL wrappers in place and shows triage insights, nested EML content, image previews, QR and calendar-invite URLs in a sidebar, with offline ports of Sublime Security rules.",
-  "version": "1.10.0",
+  "version": "1.11.0",
   "author": "ExploitBlock",
   "browser_specific_settings": {
     "gecko": {
@@ -14,7 +14,7 @@
   "permissions": ["messagesRead", "messagesModify", "menus", "clipboardWrite", "storage"],
   "optional_permissions": ["https://*/*"],
   "background": {
-    "scripts": ["inflate-zlib.js", "unwrap.js", "phones.js", "sublime-data.js", "sublime-rules.js", "rules.js", "forwards.js", "pdfscan.js", "jsqr.min.js", "signals.js", "ics.js", "nested.js", "ocr.js", "background.js"]
+    "scripts": ["inflate-zlib.js", "unwrap.js", "phones.js", "sublime-data.js", "sublime-rules.js", "rules.js", "forwards.js", "pdfscan.js", "jsqr.min.js", "signals.js", "ics.js", "repair.js", "msg.js", "nested.js", "ocr.js", "background.js"]
   },
   "message_display_action": {
     "default_title": "PeelScout",

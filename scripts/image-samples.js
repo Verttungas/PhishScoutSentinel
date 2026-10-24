@@ -31,7 +31,7 @@ function walk(dir, acc) {
     const p = path.join(dir, f);
     if (fs.statSync(p).isDirectory()) {
       if (f !== "Documents") walk(p, acc);
-    } else if (/\.eml$/i.test(f)) acc.push(p);
+    } else if (/\.(eml|msg)$/i.test(f)) acc.push(p);
   }
   return acc;
 }
@@ -49,9 +49,14 @@ function collect(msg) {
     .filter((img) => !/svg|icon/.test(img.mime || ""));
   for (const img of all.slice(0, 12)) add(img.bytes, img.mime, "qr");
   for (const img of all.filter((x) => x.bytes.length >= 15000).sort((a, b) => b.bytes.length - a.bytes.length).slice(0, 6)) add(img.bytes, img.mime, "ocr");
-  // JPEG images inside PDF attachments (raw ones are decoded by pdfscan.js itself).
+  // JPEG images inside PDF attachments (raw ones are decoded by pdfscan.js itself); the
+  // page images of image-only PDFs are read with OCR too.
   for (const f of S.scanFiles(msg, S.addressesIn((msg.headers || {}).to))) {
-    for (const j of (f.scan && f.scan.jpegs) || []) add(Buffer.from(j), "image/jpeg", "qr");
+    const textless = f.scan && !String(f.scan.text || "").trim();
+    for (const j of (f.scan && f.scan.jpegs) || []) {
+      add(Buffer.from(j), "image/jpeg", "qr");
+      if (textless && j.length >= 15000) add(Buffer.from(j), "image/jpeg", "ocr");
+    }
   }
   for (const m of msg.nested || []) collect(m);
 }

@@ -17,6 +17,7 @@ const REPO = path.join(__dirname, "..");
 require(path.join(REPO, "phones.js"));
 const S = require(path.join(REPO, "signals.js"));
 const N = require(path.join(REPO, "nested.js"));
+const Msg = require(path.join(REPO, "msg.js"));
 const ICS = require(path.join(REPO, "ics.js"));
 
 const args = process.argv.slice(2);
@@ -63,13 +64,13 @@ function walk(dir, acc) {
     // A "Documents" folder copied into the samples is not a sample.
     if (st.isDirectory()) {
       if (f !== "Documents") walk(p, acc);
-    } else if (/\.eml$/i.test(f)) acc.push(p);
+    } else if (/\.(eml|msg)$/i.test(f)) acc.push(p);
   }
   return acc;
 }
 
 function withHashes(files) {
-  return (files || []).map((f) => Object.assign({}, f, { sha256: crypto.createHash("sha256").update(Buffer.from(f.bytes, "latin1")).digest("hex") }));
+  return (files || []).map((f) => Object.assign({}, f, { sha256: f.rebuilt ? "" : crypto.createHash("sha256").update(Buffer.from(f.bytes, "latin1")).digest("hex") }));
 }
 
 const sha256 = (bytes) => crypto.createHash("sha256").update(bytes).digest("hex");
@@ -99,16 +100,19 @@ function imageFiles(msg) {
 // taken from the image cache; then the image files.
 function scannedFiles(msg) {
   const files = S.scanFiles(Object.assign({}, msg, { files: withHashes(msg.files) }), S.addressesIn((msg.headers || {}).to));
+  const pageText = [];
   for (const f of files) {
     const sc = f.scan;
     if (!sc || !sc.jpegs) continue;
     for (const j of sc.jpegs) {
       const hit = imageCache && imageCache[sha256(Buffer.from(j))];
       if (hit && hit.qr && sc.qr.indexOf(hit.qr) < 0) sc.qr.push(hit.qr);
+      // Page images of an image-only PDF, as "Read images (OCR)" reads them.
+      if (withOcr && hit && hit.text !== undefined && !String(sc.text || "").trim() && j.length >= 15000) pageText.push(S.ocrFile(f.name + " (page image)", hit.text, hit.confidence, sha256(Buffer.from(j))));
     }
     delete sc.jpegs;
   }
-  return files.concat(imageFiles(msg));
+  return files.concat(imageFiles(msg), pageText);
 }
 
 function icsUrls(raw) {
@@ -118,6 +122,15 @@ function icsUrls(raw) {
 }
 
 function analyse(raw) {
+  // An Outlook .msg (also one saved with an .eml name): its message is a layer of its
+  // own, as background.js shows it.
+  if (Msg.isMsg(raw)) {
+    const list = N.parse(raw, "");
+    if (list.length) list[0].container = true;
+    const outer = { layer: "outer", headers: {}, subject: "", text: "", html: "", attachments: [{ name: "Outlook message (.msg)", contentType: "application/vnd.ms-outlook" }], files: [], hasNestedEml: true };
+    const nested = list.map((m) => Object.assign({}, m, { files: scannedFiles(m) }));
+    return S.analyzeAll(outer, nested, [], settings);
+  }
   const top = N.parseMessage(raw, 0);
   const outer = {
     layer: "outer",
