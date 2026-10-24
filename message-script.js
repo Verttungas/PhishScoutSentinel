@@ -1128,7 +1128,7 @@
       rebuild.addEventListener("click", function () {
         api.runtime.sendMessage({ type: "open-rebuild" }).catch(function () {});
       });
-      const row = el("div", "ov-actions");
+      const row = el("div", "ov-actions ov-rebuild");
       row.appendChild(rebuild);
       ov.appendChild(row);
     }

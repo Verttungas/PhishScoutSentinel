@@ -1183,7 +1183,8 @@
     // On a tie, the guide's more specific mechanism goes first (RECON last of Response).
     const ORDER = ["simulation", "docuphish", "bec", "scam419", "vishing", "job", "techsupport", "o365", "phishing", "recon"];
     const rank = function (k) { const i = ORDER.indexOf(k); return HINTS.indexOf(k) >= 0 ? 99 : i < 0 ? 50 : i; };
-    const list = Object.keys(routes).map(function (k) { return routes[k]; });
+    // What Thunderbird kept of an opened .msg (a few bytes) says nothing about the message.
+    const list = msg.outlookTruncated ? [] : Object.keys(routes).map(function (k) { return routes[k]; });
     for (const r of list) {
       r.strong = r.signals.filter(function (x) { return x.strength === "strong"; }).length;
     }

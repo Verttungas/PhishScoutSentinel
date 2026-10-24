@@ -383,4 +383,5 @@ test("what Thunderbird keeps of an opened .msg (up to its first zero byte) is re
   const layers = S.analyzeAll(outer, [], [], {});
   assert.ok(layers[0].outlookFile);
   assert.ok(layers[0].notes.some((n) => /Rebuild and open/.test(n)));
+  assert.deepStrictEqual(layers[0].routes, []);
 });
