@@ -1,10 +1,10 @@
 # PeelScout
 
-Thunderbird add-on that removes email-security URL wrappers (every known layer) right in the message when you open it, previews image attachments, shows nested `.eml` content (and QR URLs), lists phone numbers found in that nested mail, and lists URLs hidden in calendar invites (`.ics`).
+Thunderbird add-on that removes email-security URL wrappers (every known layer) right in the message when you open it, previews image attachments, shows nested `.eml` and Outlook `.msg` content (and QR URLs), lists phone numbers found in that nested mail, and lists URLs hidden in calendar invites (`.ics`).
 
 A normal click opens the destination URL in your browser. The stored `.eml` is not changed. PeelScout does not need internet to run (the optional domain-age lookup — RDAP, then whois.com — is the only network use, and it is off by default).
 
-Not in this version: OCR of PDF pages (a scanned PDF is flagged, not read), Outlook `.msg` attachments. Translator is not included.
+Not in this version: OCR of PDF pages drawn as vector graphics or as non-JPEG images (they are flagged, not read). Translator is not included.
 
 ## Install in Thunderbird
 
@@ -23,6 +23,15 @@ Release builds are not signed yet. If Thunderbird says the add-on could not be v
 Debug Add-ons → **Load Temporary Add-on…** → `manifest.json` from a source checkout. Unloads when Thunderbird restarts.
 
 Requires Thunderbird 128+.
+
+## 1.11.0
+
+- New: **Outlook `.msg` files**. An attached `.msg` is read like an attached `.eml`: the original Internet headers when the file kept them, sender, recipients, HTML / text / RTF body, attachments and embedded messages, shown in Previews and analysed as its own layer
+- New: **Open an Outlook file…** (popup, and a *Rebuild and open the file…* button in the sidebar). Thunderbird keeps a `.msg` opened directly — also one saved with an `.eml` name, as some clients do — only up to its first zero byte, so it shows a binary line and nothing can be analysed. The button opens a PeelScout page: choose (or drop) the same file, and the message is rebuilt as an `.eml` and opened in a new tab, where the sidebar analyses it as usual; it can also be saved. The file is read on this computer only
+- New: **damaged `.msg` files are rebuilt**. A `.msg` that went through a text line-ending conversion (a CR LF added in front, every lone CR or LF byte turned into CR LF) is restored from its own structure: directory, FAT and DIFAT, stream starts, PDF cross-reference tables. Attachments are then repaired with their own checks: zlib streams by their checksum, JPEG images (also those inside PDFs) by decoding them so every block continues its neighbours. The sidebar says what was rebuilt; a repaired file gives no hash, since it may still differ from the original by a few bytes
+- New: the **page images of image-only PDFs** are shown in Previews (for attached emails) and read by *Read images (OCR)*, so a lure drawn as a picture in a PDF reaches the insights
+- New: a phone number OCR read once that differs by one digit from a number the image repeats is dropped as a misread
+- `eval-samples.js` and `image-samples.js` take `.msg` files, damaged ones included
 
 ## 1.10.0
 
@@ -88,7 +97,7 @@ Requires Thunderbird 128+.
 - Peels every known wrapper/redirect layer (e.g. Safe Links → Google redirect → Proofpoint) on every link, in place; a link whose text is the wrapped URL now shows the destination
 - Keeps inner `%2` / `%25` encoding so nested redirects still work
 - Right-click a peeled link: show original wrapper, copy it, or keep unwrapping
-- If the message contains another `.eml` (`message/rfc822`), the inner subject, body, and images are shown automatically
+- If the message contains another `.eml` (`message/rfc822`) or an Outlook `.msg`, the inner subject, body, and images are shown automatically; a `.msg` damaged by a line-ending conversion is rebuilt first. A `.msg` opened directly is rebuilt and reopened with *Open an Outlook file…*
 - Image-only nested mail skips the empty body box and shows the photo large enough to read
 - Image attachments (PNG, JPEG, GIF, WebP, BMP, AVIF, SVG, ICO) appear as thumbnails at the top; click one for a full-window preview (← / → to move, click the image for actual size, Esc to close). QR codes in them are listed too
 - QR codes in that inner (and outer) HTML are decoded; the URL is listed **raw** (not peeled)
@@ -152,7 +161,7 @@ Token-only wrappers (Mimecast `protect-*`, some Sophos/VIPRE) stay as-is.
 npm test
 ```
 
-Runs the unit tests for the unwrap, nested-EML, ICS, phone, forward and PDF parsers and the insights engine with Node's built-in runner (no dependencies). Leave `test/`, `scripts/` and `package.json` out when zipping the `.xpi`.
+Runs the unit tests for the unwrap, nested-EML, `.msg` (with the damage repair), ICS, phone, forward and PDF parsers and the insights engine with Node's built-in runner (no dependencies). Leave `test/`, `scripts/` and `package.json` out when zipping the `.xpi`.
 
 To measure the engine against classified samples (folder names give the expected result, e.g. `Malicious/Link/O365`, `FIR`, `NTD`):
 

@@ -161,12 +161,60 @@ async function collectIcsUrls(messageId) {
   return urls;
 }
 
+// A client that saves Outlook .msg files with an .eml name: Thunderbird shows no
+// headers and a binary body, and keeps the file only up to its first zero byte, so the
+// add-on cannot read it from here. The sidebar then offers rebuild.html, which reads the
+// file the analyst picks (msg.js) and opens the rebuilt message. Returns {list} with the
+// message when Thunderbird did keep the whole file, {truncated: true} when it did not.
+const outlookCache = new Map();
+
+async function outlookMessage(messageId) {
+  if (outlookCache.has(messageId)) return outlookCache.get(messageId);
+  let found = null;
+  try {
+    const full = await messenger.messages.getFull(messageId);
+    const h = full.headers || {};
+    if (!h.from && !h.subject && !h.date && !h.received) {
+      let raw = await messenger.messages.getRaw(messageId);
+      if (raw && typeof raw !== "string") raw = await NestedEml.fileToRaw(raw);
+      if (raw && PeelMsg.isMsg(raw)) {
+        const list = NestedEml.parse(raw, "");
+        if (list.length) list[0].container = true;
+        found = list.length ? { list } : { truncated: true };
+      }
+    }
+  } catch (_) {}
+  outlookCache.set(messageId, found);
+  while (outlookCache.size > 20) outlookCache.delete(outlookCache.keys().next().value);
+  return found;
+}
+
+function openRebuild() {
+  return messenger.tabs.create({ url: messenger.runtime.getURL("rebuild.html") });
+}
+
+// JPEG images inside a message's PDFs, for the preview: an image-only PDF is often the
+// whole lure.
+function pdfImages(m) {
+  const out = [];
+  for (const f of m.files || []) {
+    if (!f.bytes || out.length >= 4) continue;
+    const sc = PeelPdf.scan(binaryToBytes(f.bytes), { images: true });
+    for (const j of (sc.jpegs || []).slice(0, 2)) {
+      out.push({ name: f.name, dataUrl: "data:image/jpeg;base64," + bytesToBase64(j), size: j.length, textless: !String(sc.text || "").trim() });
+    }
+  }
+  return out;
+}
+
 async function collectNested(messageId) {
+  const outlook = await outlookMessage(messageId);
+  if (outlook && outlook.list) return outlook.list.map((m) => Object.assign({}, m, { pdfImages: pdfImages(m) }));
   const candidates = [];
   const seen = Object.create(null);
   function addCandidate(partName, name, contentType) {
     if (!partName || seen[partName]) return;
-    if (!NestedEml.isRfc822(name, contentType)) return;
+    if (!NestedEml.isRfc822(name, contentType) && !NestedEml.isOutlookMsg(name, contentType)) return;
     seen[partName] = true;
     candidates.push({ partName, name });
   }
@@ -191,7 +239,7 @@ async function collectNested(messageId) {
       for (const msg of NestedEml.parse(raw, c.name || "message.eml")) list.push(msg);
     } catch (_) {}
   }
-  return list.slice(0, 5);
+  return list.slice(0, 5).map((m) => Object.assign(m, { pdfImages: pdfImages(m) }));
 }
 
 // Formats Thunderbird can render in an <img>.
@@ -237,6 +285,15 @@ async function collectImageAttachments(messageId) {
       if (out.length >= MAX_IMAGES) break;
       if (!part.partName || part === full) continue;
       const name = part.name || part.filename || "";
+      // The page image of an image-only PDF: often the whole lure.
+      if (PeelPdf.isPdf(name, part.contentType) && !(part.size > MAX_PDF_BYTES)) {
+        try {
+          const file = await messenger.messages.getAttachmentFile(messageId, part.partName);
+          const sc = PeelPdf.scan(new Uint8Array(await file.arrayBuffer()), { images: true });
+          if (!String(sc.text || "").trim()) for (const j of (sc.jpegs || []).slice(0, 2)) out.push({ name: "Image in " + name, size: j.length, dataUrl: "data:image/jpeg;base64," + bytesToBase64(j) });
+        } catch (_) {}
+        continue;
+      }
       const mime = imageMime(name, part.contentType);
       if (!mime) continue;
       const disposition = headerValue(part, "content-disposition");
@@ -264,6 +321,12 @@ async function sha256Hex(bytes) {
   }
 }
 
+function bytesToBase64(bytes) {
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
 function binaryToBytes(bin) {
   const b = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i) & 0xff;
@@ -278,8 +341,24 @@ const MAX_PDFS = 5;
 // PDF attachments are read for the static scan in signals.js (pdfscan.js).
 async function collectOuterLayer(messageId) {
   const layer = { layer: "outer", label: "", headers: {}, text: "", html: "", attachments: [], files: [], hasNestedEml: false };
+  const outlook = await outlookMessage(messageId);
+  if (outlook) {
+    // Its binary "body" is the .msg file itself, not text to analyse.
+    layer.attachments.push({ name: "Outlook message (.msg)", contentType: "application/vnd.ms-outlook" });
+    layer.hasNestedEml = !!outlook.list;
+    layer.outlookContainer = !!outlook.list;
+    layer.outlookTruncated = !!outlook.truncated;
+    return layer;
+  }
   try {
     const full = await messenger.messages.getFull(messageId);
+    // A message rebuilt by rebuild.js carries this install's token.
+    const { rebuildToken } = await messenger.storage.local.get("rebuildToken");
+    const marked = (v) => !!rebuildToken && String(Array.isArray(v) ? v[0] : v || "").toLowerCase().indexOf(rebuildToken) === 0;
+    if (full.headers && marked(full.headers["x-peelscout-rebuilt"])) {
+      const note = full.headers["x-peelscout-note"];
+      layer.rebuiltNote = NestedEml.decodeWord(String((Array.isArray(note) ? note[0] : note) || "Rebuilt from an Outlook .msg file."));
+    }
     for (const k of SIGNAL_HEADERS) {
       const v = full.headers && full.headers[k];
       // Every Received hop matters (their IPs are checked); other headers keep the first value.
@@ -293,19 +372,21 @@ async function collectOuterLayer(messageId) {
       const ct = String(part.contentType || "").toLowerCase();
       const name = part.name || part.filename || "";
       const disposition = headerValue(part, "content-disposition");
-      if (/^message\/rfc822/.test(ct) || NestedEml.isRfc822(name, ct)) {
+      if (/^message\/rfc822/.test(ct) || NestedEml.isRfc822(name, ct) || NestedEml.isOutlookMsg(name, ct)) {
         layer.hasNestedEml = true;
         layer.attachments.push({ name: name || "message.eml", contentType: ct });
         continue;
       }
       if (name || disposition.indexOf("attachment") === 0) {
-        layer.attachments.push({ name, contentType: ct, size: part.size || 0 });
+        // A file the damage repair touched may differ from the original: no hash.
+        const rebuilt = layer.rebuiltNote && marked(part.headers && part.headers["x-peelscout-rebuilt"]) ? { verified: /checked/.test(headerValue(part, "x-peelscout-rebuilt")) } : undefined;
+        layer.attachments.push({ name, contentType: ct, size: part.size || 0, rebuilt });
         if (PeelPdf.isPdf(name, ct) && part.partName && layer.files.length < MAX_PDFS && !(part.size > MAX_PDF_BYTES)) {
           try {
             const file = await messenger.messages.getAttachmentFile(messageId, part.partName);
             if (file.size <= MAX_PDF_BYTES) {
               const bytes = new Uint8Array(await file.arrayBuffer());
-              layer.files.push({ name, contentType: ct, size: file.size, bytes, sha256: await sha256Hex(bytes) });
+              layer.files.push({ name, contentType: ct, size: file.size, bytes, sha256: rebuilt ? "" : await sha256Hex(bytes), rebuilt });
             }
           } catch (_) {}
         }
@@ -436,7 +517,8 @@ async function analyzeLayers(outer, nested, icsUrls, messageId) {
           continue;
         }
         const bytes = binaryToBytes(f.bytes);
-        files.push({ name: f.name, contentType: f.contentType, size: f.size, bytes, sha256: await sha256Hex(bytes) });
+        // A file rebuilt from a damaged .msg may differ from the original: no hash.
+        files.push({ name: f.name, contentType: f.contentType, size: f.size, bytes, sha256: f.rebuilt ? "" : await sha256Hex(bytes), rebuilt: f.rebuilt });
       }
       const n = Object.assign({}, m, { files });
       n.files = (await scanPdfs(n)).concat(qr.nested[i] || []);
@@ -452,6 +534,11 @@ async function analyzeLayers(outer, nested, icsUrls, messageId) {
 // What the message tab needs of an attached message (not the PDF bytes).
 function forDisplay(nested) {
   return nested.map((m) => Object.assign({}, m, { files: undefined }));
+}
+
+// Analysis needs the PDFs, not their preview images.
+function forAnalysis(nested) {
+  return nested.map((m) => Object.assign({}, m, { pdfImages: undefined }));
 }
 
 // --- Optional domain-age lookup (RDAP, then whois.com) -----------------------------
@@ -578,7 +665,7 @@ async function pushSignals(tabId, messageId, nested, urls) {
     outer.files = outer.files.concat(ocr.outer);
     nested = nested.map((m, i) => Object.assign({}, m, { files: (m.files || []).concat(ocr.nested[i] || []) }));
   }
-  const layers = await analyzeLayers(outer, nested, urls, messageId);
+  const layers = await analyzeLayers(outer, forAnalysis(nested), urls, messageId);
   const ocrInfo = { images: await countOcrImages(messageId, nested), state: ocrRunning.has(messageId) ? "running" : ocr ? "done" : "idle" };
   const rdap = await rdapEnabled();
   let state = rdap ? "pending" : "off";
@@ -606,7 +693,12 @@ function dataUrlBytes(dataUrl) {
   return Math.floor((b64.length * 3) / 4);
 }
 
-async function ocrImages(messageId, nested) {
+// Images worth reading: large images of the message and of attached messages, and the
+// page images of PDFs that have no text of their own (image-only PDFs).
+const ocrOuterCache = new Map();
+
+async function ocrOuterImages(messageId) {
+  if (ocrOuterCache.has(messageId)) return ocrOuterCache.get(messageId);
   const outer = [];
   try {
     const full = await messenger.messages.getFull(messageId);
@@ -614,15 +706,36 @@ async function ocrImages(messageId, nested) {
     walkParts(full, parts);
     for (const part of parts) {
       if (part === full || !part.partName) continue;
-      const mime = imageMime(part.name || part.filename, part.contentType);
+      const name = part.name || part.filename || "";
+      if (PeelPdf.isPdf(name, part.contentType) && !(part.size > MAX_PDF_BYTES)) {
+        try {
+          const file = await messenger.messages.getAttachmentFile(messageId, part.partName);
+          const sc = PeelPdf.scan(new Uint8Array(await file.arrayBuffer()), { images: true });
+          if (String(sc.text || "").trim()) continue;
+          for (const j of (sc.jpegs || []).filter((x) => x.length >= OCR_MIN_BYTES).slice(0, 2)) outer.push({ name: name + " (page image)", bytes: j, size: j.length });
+        } catch (_) {}
+        continue;
+      }
+      const mime = imageMime(name, part.contentType);
       if (!mime || mime === "image/svg+xml" || mime === "image/x-icon") continue;
       if (part.size && (part.size < OCR_MIN_BYTES || part.size > MAX_IMAGE_BYTES)) continue;
-      outer.push({ name: part.name || part.filename || "image", partName: part.partName, size: part.size || 0 });
+      outer.push({ name: name || "image", partName: part.partName, size: part.size || 0 });
     }
   } catch (_) {}
   outer.sort((a, b) => b.size - a.size);
-  const inner = (nested || []).map((m) => (m.images || []).filter((img) => dataUrlBytes(img.dataUrl) >= OCR_MIN_BYTES).slice(0, OCR_MAX_IMAGES));
-  return { outer: outer.slice(0, OCR_MAX_IMAGES), nested: inner };
+  ocrOuterCache.set(messageId, outer.slice(0, OCR_MAX_IMAGES));
+  while (ocrOuterCache.size > 20) ocrOuterCache.delete(ocrOuterCache.keys().next().value);
+  return ocrOuterCache.get(messageId);
+}
+
+async function ocrImages(messageId, nested) {
+  const inner = (nested || []).map((m) =>
+    (m.images || [])
+      .filter((img) => dataUrlBytes(img.dataUrl) >= OCR_MIN_BYTES)
+      .concat((m.pdfImages || []).filter((p) => p.textless && p.size >= OCR_MIN_BYTES).map((p) => ({ name: p.name + " (page image)", dataUrl: p.dataUrl })))
+      .slice(0, OCR_MAX_IMAGES)
+  );
+  return { outer: await ocrOuterImages(messageId), nested: inner };
 }
 
 async function countOcrImages(messageId, nested) {
@@ -648,10 +761,15 @@ async function runOcr(tabId) {
     await status("Loading OCR (the first time takes a few seconds)…");
     for (const img of found.outer) {
       await status("Reading image " + ++k + " of " + total + "…");
-      const file = await messenger.messages.getAttachmentFile(messageId, img.partName);
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      const out = await PeelOcr.recognize(new Blob([bytes], { type: imageMime(img.name, file.type) || "image/png" }));
-      result.outer.push(PeelSignals.ocrFile(img.name, out.text, out.confidence, await sha256Hex(bytes)));
+      let bytes = img.bytes, type = "image/jpeg";
+      if (!bytes) {
+        const file = await messenger.messages.getAttachmentFile(messageId, img.partName);
+        bytes = new Uint8Array(await file.arrayBuffer());
+        type = imageMime(img.name, file.type) || "image/png";
+      }
+      const out = await PeelOcr.recognize(new Blob([bytes], { type }));
+      // The hash of an image taken out of a PDF is not one to mark.
+      result.outer.push(PeelSignals.ocrFile(img.name, out.text, out.confidence, img.bytes ? "" : await sha256Hex(bytes)));
     }
     for (let i = 0; i < found.nested.length; i++) {
       result.nested[i] = [];
@@ -675,6 +793,7 @@ async function runOcr(tabId) {
 }
 
 messenger.runtime.onMessage.addListener((msg, sender) => {
+  if (msg && msg.type === "open-rebuild") return openRebuild().then(() => true);
   if (msg && msg.type === "ocr-run" && sender && sender.tab) {
     runOcr(sender.tab.id);
     return Promise.resolve(true);

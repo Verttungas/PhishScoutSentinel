@@ -409,6 +409,23 @@
     return hits;
   }
 
+  // A lure repeats its number; OCR now and then misreads one digit of one copy. A number
+  // read once from an image that differs by one digit from one read several times there
+  // is that misread.
+  function ocrMisreads(phones, ocrText) {
+    if (!ocrText || phones.length < 2) return phones;
+    const digits = (p) => p.replace(/\D/g, "").slice(-10);
+    const count = (p) => {
+      const re = new RegExp(digits(p).split("").join("\\D{0,3}"), "g");
+      return (String(ocrText).match(re) || []).length;
+    };
+    const near = (a, b) => a.length === b.length && a.split("").filter((c, i) => c !== b[i]).length === 1;
+    return phones.filter(function (p) {
+      if (count(p) !== 1) return true;
+      return !phones.some(function (o) { return o !== p && near(digits(o), digits(p)) && count(o) >= 2; });
+    });
+  }
+
   // Phone numbers placed as a call to action ("call us at…", "Toll Free:"), not the
   // ones in a signature block (Tel:, Fax, Ext., Cell#).
   function callbackPhones(text, phones) {
@@ -596,7 +613,7 @@
         !(from.domain && regDomain(from.domain) === l.reg && l.destReg === l.reg && !isFreemail(from.domain) && !l.qr);
     });
     const phoneText = ownPart + (fileText ? "\n" + fileText : "");
-    const phones = Phones && Phones.extractPhones ? Phones.extractPhones(phoneText) : [];
+    const phones = ocrMisreads(Phones && Phones.extractPhones ? Phones.extractPhones(phoneText) : [], imageText);
     const cbPhones = callbackPhones(phoneText, phones);
     const fromFree = isFreemail(from.domain);
     const nWords = words(ownText);
@@ -627,7 +644,9 @@
     }
 
     // --- Report / forwarding layer -------------------------------------------------
-    if (msg.layer === "outer" && msg.hasNestedEml) {
+    if (msg.outlookTruncated) notes.push("This file is an Outlook .msg: Thunderbird keeps it only up to its first zero byte, so there is nothing to analyse here. “Rebuild and open” reads the file itself (choose the same file) and opens the rebuilt message in a new tab.");
+    if (msg.rebuiltNote) notes.push(msg.rebuiltNote);
+    if (msg.layer === "outer" && msg.hasNestedEml && !msg.outlookContainer) {
       notes.push("Forwarding message with the original attached: analyse the attachment. The reporting channel (phishing mailbox → PhishLabs) does not decide the classification.");
       if (R.PHRASES.reportNarrative.test(bodyText) || nWords > 80) {
         add("firInternal", "weak", "Narrative text addressed to security", "Check the substantive message's To and purpose; “please review this email” is not enough.");
@@ -1220,6 +1239,7 @@
       iocs,
       senderNote,
       notes,
+      outlookFile: !!msg.outlookTruncated,
       sublime,
       language: language ? language.name : "",
       // Everything observed, for the Indicators tab (candidates stay in iocs).
@@ -1237,7 +1257,9 @@
         phones: phones,
         attachments: attachments.map(function (a) {
           const f = (msg.files || []).find(function (x) { return x.name === a.name; });
-          return { name: a.name || "(no name)", type: a.contentType || "", sha256: f && f.sha256 ? f.sha256 : "", info: f && f.scan ? (f.kind === "image" ? "Read with OCR (" + (f.scan.confidence || 0) + "% confidence)" : pdfSummary(f.scan)) : "" };
+          const info = f && f.scan ? (f.kind === "image" ? "Read with OCR (" + (f.scan.confidence || 0) + "% confidence)" : pdfSummary(f.scan)) : "";
+          const rebuilt = a.rebuilt ? "rebuilt from a damaged .msg" + (a.rebuilt.verified ? " and checked" : "") + "; no hash, it may differ from the original" : "";
+          return { name: a.name || "(no name)", type: a.contentType || "", sha256: f && f.sha256 ? f.sha256 : "", info: [info, rebuilt].filter(Boolean).join(" · ") };
         }),
       },
     };
@@ -1346,7 +1368,12 @@
       layers.push(analyze(Object.assign({ label: "Opened message", short: "Opened message" }, o)));
     }
     (nested || []).forEach(function (m, i) {
-      const n = Object.assign({}, m, shared, {
+      // The opened file itself was an Outlook .msg: its message is the one to read.
+      const n = Object.assign({}, m, shared, m.container ? {
+        layer: "nested",
+        label: "Outlook message (.msg)" + (m.subject ? " · " + m.subject : ""),
+        short: "Outlook message",
+      } : {
         layer: "nested",
         label: "Attached email " + (i + 1) + (m.filename ? " · " + m.filename : "") + (m.subject ? " · " + m.subject : ""),
         short: "Attached email" + ((nested || []).length > 1 ? " " + (i + 1) : ""),

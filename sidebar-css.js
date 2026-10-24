@@ -158,6 +158,9 @@ code, .mono { font-family: var(--mono); font-size: 11.5px; }
 .nest-block { margin: 0 0 12px; border: 1px solid var(--rule); border-radius: 8px; background: var(--surface); overflow: hidden; }
 .nest-title { padding: 7px 10px 0; font-weight: 650; }
 .nest-who { padding: 1px 10px 8px; font-size: 11.5px; color: var(--muted); border-bottom: 1px solid var(--rule-soft); overflow-wrap: anywhere; }
+.nest-note { margin-top: 4px; color: var(--caution); }
+.nest-pdf { margin: 0; display: flex; flex-direction: column; gap: 3px; }
+.nest-pdf figcaption { font-size: 11.5px; color: var(--muted); }
 .nest-inner { padding: 8px 10px 10px; }
 .nest-inner.nest-tight { padding-top: 10px; }
 .nest-frame { width: 100%; border: 1px solid var(--rule-soft); border-radius: 6px; overflow: hidden; }
